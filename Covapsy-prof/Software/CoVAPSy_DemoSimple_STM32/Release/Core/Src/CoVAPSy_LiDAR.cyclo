@@ -1,0 +1,2 @@
+../Core/Src/CoVAPSy_LiDAR.c:7:6:LiDAR_init	1
+../Core/Src/CoVAPSy_LiDAR.c:19:6:LiDAR_start_Rx	1

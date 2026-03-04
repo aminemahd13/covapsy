@@ -1,0 +1,5 @@
+../Core/Src/CoVAPSy_moteurs.c:9:6:Propulsion_init	8	static
+../Core/Src/CoVAPSy_moteurs.c:13:6:Direction_init	8	static
+../Core/Src/CoVAPSy_moteurs.c:17:6:set_direction_degres	24	static
+../Core/Src/CoVAPSy_moteurs.c:29:6:set_vitesse_m_s	24	static
+../Core/Src/CoVAPSy_moteurs.c:52:6:recule	8	static
