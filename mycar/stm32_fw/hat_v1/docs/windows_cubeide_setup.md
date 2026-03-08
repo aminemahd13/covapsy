@@ -42,7 +42,7 @@ Copy files from `src/` into your project `Core/Src` and `Core/Inc`:
 - `control_mapping.h`, `control_mapping.c`
 - `fw_app.h`, `fw_app.c`
 - `board_if.h`
-- use `board_port_template.c` as a base and rename to project-specific board file
+- use `board_port_template.c` as a working baseline board port (rename only if preferred)
 - use `main.c` as integration reference
 
 Then wire board functions to HAL generated code.

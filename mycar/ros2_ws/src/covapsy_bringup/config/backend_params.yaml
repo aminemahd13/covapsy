@@ -29,8 +29,8 @@ stm32_bridge:
     pwm_prop_channel: 0
     pwm_dir_channel: 1
     pwm_prop_stop: 7.5
-    pwm_prop_deadband: 0.4
-    pwm_prop_delta_max: 1.5
+    pwm_prop_deadband: 0.56
+    pwm_prop_delta_max: 1.0
     pwm_speed_hard: 8.0
     pwm_direction_sign: -1.0
     pwm_angle_deg_max: 18.0

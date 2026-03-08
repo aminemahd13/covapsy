@@ -50,8 +50,8 @@ Professor baseline values from `test_pwm_propulsion.py`:
 
 Current repository defaults in `backend_params.yaml`:
 - `pwm_prop_stop = 7.5`
-- `pwm_prop_deadband = 0.4`
-- `pwm_prop_delta_max = 1.5`
+- `pwm_prop_deadband = 0.56`
+- `pwm_prop_delta_max = 1.0`
 - `pwm_speed_hard = 8.0`
 
 Procedure:

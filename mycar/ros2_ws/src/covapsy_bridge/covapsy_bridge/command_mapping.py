@@ -16,8 +16,8 @@ class DriveLimits:
 @dataclass(frozen=True)
 class PwmCalibration:
     prop_stop: float = 7.5
-    prop_deadband: float = 0.4
-    prop_delta_max: float = 1.5
+    prop_deadband: float = 0.56
+    prop_delta_max: float = 1.0
     speed_hard: float = 8.0
     direction_sign: float = -1.0
     angle_deg_max: float = 18.0
@@ -138,4 +138,3 @@ def pwm_duties_from_command(speed_m_s: float, steering_deg: float, cal: PwmCalib
     )
     steer_pwm = max(cal.angle_min, min(cal.angle_max, steer_pwm))
     return prop, steer_pwm
-

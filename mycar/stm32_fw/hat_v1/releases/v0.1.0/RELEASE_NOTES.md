@@ -1,7 +1,7 @@
 # hat_v1 Firmware v0.1.0
 
-Date: `YYYY-MM-DD`
-Author: `TODO`
+Date: `2026-03-08`
+Author: `COVAPSY Team`
 
 ## Summary
 

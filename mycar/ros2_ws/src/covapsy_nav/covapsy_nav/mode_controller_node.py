@@ -26,6 +26,9 @@ from std_msgs.msg import String, Bool
 from sensor_msgs.msg import LaserScan
 import numpy as np
 
+from covapsy_nav.mode_rules import DriveCommand
+from covapsy_nav.mode_rules import select_mode_command
+
 
 class ModeControllerNode(Node):
 
@@ -101,31 +104,23 @@ class ModeControllerNode(Node):
             self.get_logger().info(f'Mode changed to: {new_mode}')
 
     def control_loop(self):
+        selected = select_mode_command(
+            mode=self.mode,
+            reactive_cmd=DriveCommand(
+                linear_x=float(self.reactive_cmd.linear.x),
+                angular_z=float(self.reactive_cmd.angular.z),
+            ),
+            pursuit_cmd=DriveCommand(
+                linear_x=float(self.pursuit_cmd.linear.x),
+                angular_z=float(self.pursuit_cmd.angular.z),
+            ),
+            mapping_speed_cap=float(self.get_parameter('mapping_speed_cap').value),
+            min_front_dist=float(self.min_front_dist),
+        )
+
         cmd = Twist()
-
-        if self.mode in ('IDLE', 'STOPPED'):
-            cmd.linear.x = 0.0
-            cmd.angular.z = 0.0
-
-        elif self.mode == 'MAPPING':
-            cmd = self.reactive_cmd
-            cap = self.get_parameter('mapping_speed_cap').value
-            cmd.linear.x = min(cmd.linear.x, cap)
-
-        elif self.mode == 'REACTIVE':
-            cmd = self.reactive_cmd
-
-        elif self.mode == 'RACING':
-            # Use pursuit if available, fallback to reactive
-            if abs(self.pursuit_cmd.linear.x) > 0.01:
-                cmd = self.pursuit_cmd
-            else:
-                cmd = self.reactive_cmd
-
-        # Emergency slowdown if obstacle very close
-        if self.min_front_dist < 0.15 and cmd.linear.x > 0:
-            cmd.linear.x = 0.0
-            cmd.angular.z = 0.0
+        cmd.linear.x = selected.linear_x
+        cmd.angular.z = selected.angular_z
 
         self.cmd_pub.publish(cmd)
 
