@@ -45,6 +45,7 @@ From `Connecteurs_Cavaliers_CarteHat.pdf`:
 From professor SPI guide:
 - 6-byte transfer cycles.
 - tutorial examples use `0x55 0x55` frame prefix and `spi.mode = 0`, `1 MHz`.
+- Slave-select (`SS`) is not wired to STM32 on the HAT baseline, so STM32 side uses software NSS.
 
 `backend_params.yaml` exposes these fields:
 - `spi_header_0`, `spi_header_1`

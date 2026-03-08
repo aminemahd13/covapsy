@@ -9,3 +9,9 @@ pytest-cache-files-*/
 # Webots/editor lock artifacts
 .~lock.*
 
+# STM32CubeIDE generated folders/files
+stm32_fw/**/cubeide_project/**/Debug/
+stm32_fw/**/cubeide_project/**/Release/
+stm32_fw/**/cubeide_project/**/.settings/
+stm32_fw/**/cubeide_project/**/*.launch
+stm32_fw/**/cubeide_project/**/STM32CubeIDE/

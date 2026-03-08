@@ -11,6 +11,7 @@ This project is organized so the same autonomy nodes run in simulation and on th
 - `ros2_ws/src/covapsy_nav`: reactive gap follower, pure pursuit, mode controller.
 - `ros2_ws/src/covapsy_bridge`: backend-selectable bridge for actuation/telemetry.
 - `ros2_ws/src/covapsy_bringup`: launch files, parameters, SLAM config.
+- `stm32_fw/hat_v1`: STM32 firmware workspace for the custom HAT (SPI protocol, PWM, watchdog, flashing docs).
 - `simulation/webots`: self-contained worlds, protos, controllers.
 - `docs`: operator documentation.
 
@@ -112,6 +113,7 @@ ros2 launch covapsy_bringup car_full.launch.py backend:=spi initial_mode:=IDLE
 ## Documentation
 - [Architecture](docs/ARCHITECTURE.md)
 - [Simulation](docs/SIMULATION.md)
+- [STM32 Firmware Setup](docs/STM32_FIRMWARE.md)
 - [Pi 5 Setup](docs/PI5_SETUP.md)
 - [HAT Jumpers](docs/HAT_JUMPERS.md)
 - [Calibration](docs/CALIBRATION.md)
