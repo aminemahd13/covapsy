@@ -1,14 +1,43 @@
-# Simulation Guide (Webots + ROS2)
+# Simulation Guide
 
-## Goal
-Run the same ROS2 autonomy nodes used on the real car, but with Webots sensors and actuators.
+## Mode A: Standalone Webots (No ROS, Windows-Friendly)
+This mode runs everything inside Webots with a pure Python controller.
 
-## Prerequisites
-- Ubuntu 24.04 with ROS2 Jazzy installed.
-- Webots R2025a installed.
-- `mycar/ros2_ws` built once.
+### Prerequisites
+- Webots R2025a.
+- No ROS installation required.
 
-## 1. Build Workspace
+### Start (PowerShell, from `mycar`)
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1
+```
+
+If Webots is not in the default location:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1 -WebotsExe "C:\Path\To\webotsw.exe"
+```
+
+### World/controller used
+- World: `simulation/webots/worlds/Piste_CoVAPSy_2025a_standalone.wbt`
+- Controller: `simulation/webots/controllers/covapsy_standalone/covapsy_standalone.py`
+- Robot name: `TT02_standalone`
+
+### Keyboard controls
+- `A`: start autonomous mode
+- `N`: stop autonomous mode
+- `S`: toggle advanced gap follower / simple baseline
+- `R`: short reverse maneuver
+- `+` / `-`: increase or decrease speed cap
+
+## Mode B: ROS2-In-The-Loop (Ubuntu)
+Use this mode when validating ROS2 topics and launch files.
+
+### Prerequisites
+- Ubuntu 24.04 with ROS2 Jazzy.
+- Webots R2025a.
+- `mycar/ros2_ws` built at least once.
+
+### 1. Build workspace
 ```bash
 cd mycar/ros2_ws
 source /opt/ros/jazzy/setup.bash
@@ -16,7 +45,7 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-## 2. Start ROS2 Autonomy Stack
+### 2. Start ROS2 autonomy stack
 ```bash
 ros2 launch covapsy_bringup sim_webots.launch.py
 ```
@@ -26,20 +55,13 @@ Default behavior:
 - pure pursuit disabled (`enable_pure_pursuit:=false`)
 - no hardware bridge node
 
-## 3. Start Webots World
-Use the same sourced terminal so Webots controller can import ROS2 Python packages:
+### 3. Start Webots world
+Use the same sourced terminal so the controller can import ROS2 Python packages:
 ```bash
 webots mycar/simulation/webots/worlds/Piste_CoVAPSy_2025a_ros2.wbt
 ```
 
-World details:
-- One car: `TT02_ros2`
-- Controller: `covapsy_ros2_bridge`
-- Sensors used by bridge:
-  - LiDAR `RpLidarA2` -> `/scan`
-  - GPS + IMU -> `/odom`
-
-## 4. Verify Topic Flow
+### 4. Verify ROS2 topic flow
 ```bash
 ros2 topic hz /scan
 ros2 topic hz /scan_filtered
@@ -50,23 +72,7 @@ ros2 topic echo /mcu_status --once
 ```
 
 Expected:
-- `/scan` and `/scan_filtered` publishing continuously.
-- `/cmd_vel_reactive` non-zero while driving.
-- `/cmd_vel` following mode controller output.
+- `/scan` and `/scan_filtered` publish continuously.
+- `/cmd_vel_reactive` is non-zero while driving.
+- `/cmd_vel` follows mode controller output.
 - `/mcu_status` contains `backend=webots_ros2;ok=1`.
-
-## 5. Optional Parameter Overrides
-```bash
-ros2 launch covapsy_bringup sim_webots.launch.py max_speed:=1.0 initial_mode:=REACTIVE
-```
-
-## 6. Standalone Mode (No ROS2)
-For pure Webots local testing:
-- World: `simulation/webots/worlds/Piste_CoVAPSy_2025a.wbt`
-- Controller: `simulation/webots/controllers/covapsy_controller/covapsy_controller.py`
-
-Keyboard:
-- `A`: toggle autonomous mode.
-- `N`: stop.
-- `R`: reverse.
-- `S`: toggle simple/advanced control logic.

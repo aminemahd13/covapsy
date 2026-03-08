@@ -1,4 +1,4 @@
-# COVAPSY `mycar` Final Project
+# COVAPSY Final Project
 
 Self-contained COVAPSY stack for:
 1. ROS2-in-the-loop Webots simulation (primary development path).
@@ -14,7 +14,29 @@ This project is organized so the same autonomy nodes run in simulation and on th
 - `simulation/webots`: self-contained worlds, protos, controllers.
 - `docs`: operator documentation.
 
-## Quick Start (Simulation)
+## Quick Start (Standalone Webots on Windows, No ROS)
+Prerequisites:
+- Windows 10/11.
+- Webots R2025a installed.
+
+Run from PowerShell:
+```powershell
+cd mycar
+powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1
+```
+
+World/controller used:
+- `simulation/webots/worlds/Piste_CoVAPSy_2025a_standalone.wbt`
+- `simulation/webots/controllers/covapsy_standalone/covapsy_standalone.py`
+
+Keyboard controls:
+- `A`: start autonomous mode
+- `N`: stop autonomous mode
+- `S`: toggle advanced/simple algorithm
+- `R`: reverse maneuver
+- `+` / `-`: adjust speed cap
+
+## Quick Start (ROS2 Simulation on Ubuntu)
 Prerequisites:
 - Ubuntu 24.04 + ROS2 Jazzy.
 - Webots R2025a.
