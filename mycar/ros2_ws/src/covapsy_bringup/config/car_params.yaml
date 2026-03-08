@@ -1,0 +1,22 @@
+# TT-02 car physical parameters
+car:
+  wheelbase: 0.257       # meters (front to rear axle)
+  track_width: 0.20      # meters (left to right wheel)
+  car_width: 0.30        # meters (including body shell)
+  car_length: 0.42       # meters
+  max_steering_deg: 18.0 # degrees (STM32 servo limit)
+  max_speed_fwd: 2.0     # m/s (soft limit for competition safety)
+  max_speed_rev: -4.0    # m/s (reverse)
+
+# LiDAR mounting
+lidar:
+  x_offset: 0.0          # meters from base_link
+  y_offset: 0.0
+  z_offset: 0.15         # mounted on top
+
+# Camera mounting
+camera:
+  x_offset: 0.10         # 10cm forward
+  y_offset: 0.0
+  z_offset: 0.12         # 12cm up
+  pitch: 0.1             # radians, tilted down

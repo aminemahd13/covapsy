@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="covapsy_car">
+
+  <!-- TT-02 1/10 scale car URDF for TF and visualization -->
+
+  <xacro:property name="wheelbase" value="0.257"/>
+  <xacro:property name="track_width" value="0.20"/>
+  <xacro:property name="car_length" value="0.42"/>
+  <xacro:property name="car_width" value="0.20"/>
+  <xacro:property name="car_height" value="0.12"/>
+  <xacro:property name="wheel_radius" value="0.033"/>
+  <xacro:property name="wheel_width" value="0.026"/>
+
+  <!-- Base link (center of rear axle) -->
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <box size="${car_length} ${car_width} ${car_height}"/>
+      </geometry>
+      <origin xyz="${wheelbase/2} 0 ${car_height/2}" rpy="0 0 0"/>
+      <material name="blue">
+        <color rgba="0.1 0.1 0.8 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <!-- Base footprint (ground plane) -->
+  <link name="base_footprint"/>
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- LiDAR -->
+  <link name="laser">
+    <visual>
+      <geometry>
+        <cylinder length="0.04" radius="0.035"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0.1 0.1 0.1 1.0"/>
+      </material>
+    </visual>
+  </link>
+  <joint name="laser_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="laser"/>
+    <origin xyz="0 0 0.15" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Camera -->
+  <link name="camera_link">
+    <visual>
+      <geometry>
+        <box size="0.02 0.06 0.02"/>
+      </geometry>
+      <material name="gray">
+        <color rgba="0.5 0.5 0.5 1.0"/>
+      </material>
+    </visual>
+  </link>
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0.10 0 0.12" rpy="0 0.1 0"/>
+  </joint>
+
+</robot>
