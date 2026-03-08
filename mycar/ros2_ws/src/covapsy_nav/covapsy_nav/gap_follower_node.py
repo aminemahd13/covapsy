@@ -4,7 +4,6 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import Bool
 
 from covapsy_nav.gap_utils import compute_gap_command
 
@@ -25,14 +24,9 @@ class GapFollowerNode(Node):
         self.declare_parameter("fov_degrees", 200.0)
 
         self.create_subscription(LaserScan, "/scan_filtered", self.scan_cb, 10)
-        self.create_subscription(Bool, "/rear_obstacle", self.rear_cb, 10)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel_reactive", 10)
 
-        self.rear_blocked = False
         self.get_logger().info("Gap follower node started")
-
-    def rear_cb(self, msg: Bool):
-        self.rear_blocked = bool(msg.data)
 
     def scan_cb(self, msg: LaserScan):
         speed, steering = compute_gap_command(

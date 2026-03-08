@@ -47,3 +47,26 @@ def select_mode_command(
         return DriveCommand()
     return cmd
 
+
+def select_recovery_command(
+    phase: int,
+    reverse_speed: float,
+    reverse_steer: float,
+    rear_blocked: bool,
+) -> DriveCommand:
+    """Return drive command for ESC reverse recovery (Tamiya TBLE-02S protocol).
+
+    Phase 0: brake pulse (large negative speed, zero steer) — arms ESC reverse.
+    Phase 1: neutral (zero speed) — required pause before reverse engages.
+    Phase 2: actual reverse with steering (aborted if rear is blocked).
+    """
+    if phase == 0:
+        return DriveCommand(linear_x=-2.0, angular_z=0.0)
+    if phase == 1:
+        return DriveCommand(0.0, 0.0)
+    if phase == 2:
+        if rear_blocked:
+            return DriveCommand(0.0, 0.0)
+        return DriveCommand(linear_x=float(reverse_speed), angular_z=float(reverse_steer))
+    return DriveCommand()
+

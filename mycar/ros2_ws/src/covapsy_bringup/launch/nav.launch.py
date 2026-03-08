@@ -66,7 +66,16 @@ def generate_launch_description():
                 package="covapsy_nav",
                 executable="mode_controller_node",
                 name="mode_controller",
-                parameters=[{"initial_mode": LaunchConfiguration("initial_mode")}],
+                parameters=[
+                    {
+                        "initial_mode": LaunchConfiguration("initial_mode"),
+                        "stuck_timeout": 2.0,
+                        "reverse_speed": -0.4,
+                        "reverse_duration": 1.0,
+                        "reverse_steer": 0.3,
+                        "max_reverse_distance": 0.8,
+                    }
+                ],
                 output="screen",
             ),
         ]
