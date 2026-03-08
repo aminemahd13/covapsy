@@ -30,4 +30,14 @@
 #define FW_PWM_STEERING_MAX 9.3f
 #define FW_PWM_STEERING_CENTER 7.4f
 
+/*
+ * Rear obstacle baseline source:
+ * - CAPT_IR_D on PA3 (A2)
+ * - by default read through ADC and converted to boolean with threshold
+ */
+#define FW_REAR_OBSTACLE_USE_ADC 1u
+#define FW_REAR_OBSTACLE_ADC_HANDLE hadc2
+#define FW_REAR_OBSTACLE_ADC_THRESHOLD_RAW 2048u /* 12-bit ADC range: 0..4095 */
+#define FW_REAR_OBSTACLE_ACTIVE_HIGH 1u
+
 #endif /* FW_CONFIG_H */
