@@ -11,23 +11,23 @@ echo "=========================================="
 echo "  COVAPSY Pi 5 Initial Setup"
 echo "=========================================="
 
-# ── System Update ──
+# -- System Update --
 echo "[1/7] Updating system..."
 sudo apt update && sudo apt full-upgrade -y
 
-# ── Disable unnecessary services ──
+# -- Disable unnecessary services --
 echo "[2/7] Disabling unnecessary services..."
 sudo systemctl disable snapd snapd.socket snapd.seeded 2>/dev/null || true
 sudo systemctl disable unattended-upgrades 2>/dev/null || true
 sudo systemctl disable ModemManager 2>/dev/null || true
 sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
 
-# ── Install essential tools ──
+# -- Install essential tools --
 echo "[3/7] Installing essential tools..."
 sudo apt install -y htop tmux git build-essential cmake python3-pip \
   python3-venv i2c-tools minicom screen
 
-# ── Swap configuration (essential for 2GB RAM) ──
+# -- Swap configuration (essential for 2GB RAM) --
 echo "[4/7] Configuring swap..."
 if [ ! -f /swapfile ]; then
     sudo fallocate -l 4G /swapfile
@@ -46,7 +46,7 @@ echo -e "ALGO=lz4\nPERCENT=50" | sudo tee /etc/default/zramswap
 sudo systemctl enable zramswap
 sudo systemctl restart zramswap
 
-# ── udev rules ──
+# -- udev rules --
 echo "[5/7] Creating udev rules..."
 
 # RPLidar
@@ -63,7 +63,7 @@ EOF
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 
-# ── Boot configuration ──
+# -- Boot configuration --
 echo "[6/7] Configuring boot parameters..."
 BOOT_CONFIG="/boot/firmware/config.txt"
 if [ -f "$BOOT_CONFIG" ]; then
@@ -82,9 +82,9 @@ EOF
     fi
 fi
 
-# ── Python dependencies ──
+# -- Python dependencies --
 echo "[7/7] Installing Python dependencies..."
-pip3 install --user pyserial numpy
+pip3 install --user pyserial numpy spidev rpi-hardware-pwm
 
 echo ""
 echo "=========================================="

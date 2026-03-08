@@ -1,4 +1,4 @@
-"""Full real-car bringup: bridge backend + lidar + nav + TF."""
+"""Minimal safe bringup for first real-car track tests."""
 
 import os
 
@@ -17,23 +17,11 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
-            DeclareLaunchArgument(
-                "backend",
-                default_value="spi",
-                description="Actuator backend: spi, uart, pi_pwm",
-            ),
-            DeclareLaunchArgument(
-                "backend_config",
-                default_value=default_backend_cfg,
-                description="YAML file with backend calibration and interface params",
-            ),
-            DeclareLaunchArgument(
-                "initial_mode",
-                default_value="IDLE",
-                description="Initial mode for mode controller",
-            ),
-            DeclareLaunchArgument("max_speed", default_value="2.0"),
+            DeclareLaunchArgument("backend", default_value="spi"),
+            DeclareLaunchArgument("backend_config", default_value=default_backend_cfg),
             DeclareLaunchArgument("watchdog_timeout", default_value="0.25"),
+            DeclareLaunchArgument("max_speed", default_value="0.6"),
+            DeclareLaunchArgument("initial_mode", default_value="REACTIVE"),
             Node(
                 package="covapsy_bridge",
                 executable="stm32_bridge_node",
@@ -45,12 +33,6 @@ def generate_launch_description():
                         "watchdog_timeout": LaunchConfiguration("watchdog_timeout"),
                     },
                 ],
-                output="screen",
-            ),
-            Node(
-                package="covapsy_bridge",
-                executable="tft_status_node",
-                name="tft_status",
                 output="screen",
             ),
             IncludeLaunchDescription(
@@ -65,27 +47,9 @@ def generate_launch_description():
                 launch_arguments={
                     "max_speed": LaunchConfiguration("max_speed"),
                     "initial_mode": LaunchConfiguration("initial_mode"),
-                    "enable_pure_pursuit": "true",
+                    "enable_pure_pursuit": "false",
                 }.items(),
-            ),
-            Node(
-                package="tf2_ros",
-                executable="static_transform_publisher",
-                arguments=["0", "0", "0.15", "0", "0", "0", "base_link", "laser"],
-            ),
-            Node(
-                package="tf2_ros",
-                executable="static_transform_publisher",
-                arguments=[
-                    "0.10",
-                    "0",
-                    "0.12",
-                    "0",
-                    "0.1",
-                    "0",
-                    "base_link",
-                    "camera_link",
-                ],
             ),
         ]
     )
+

@@ -1,56 +1,33 @@
-"""LiDAR Scan Filter Node for COVAPSY.
-
-Preprocesses raw LaserScan from /scan:
-  - Replaces inf/nan with max_range
-  - Clips to [min_range, max_range]
-  - Applies sliding median filter to reduce noise
-  - Publishes filtered scan on /scan_filtered
-"""
+"""LiDAR Scan Filter Node for COVAPSY."""
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-import numpy as np
+
+from covapsy_perception.scan_filter_utils import filter_scan_ranges
 
 
 class ScanFilterNode(Node):
+    """Preprocess raw LaserScan: sanitize, clip, and median-filter."""
 
     def __init__(self):
-        super().__init__('scan_filter')
+        super().__init__("scan_filter")
 
-        self.declare_parameter('max_range', 5.0)
-        self.declare_parameter('min_range', 0.15)
-        self.declare_parameter('median_window', 3)
+        self.declare_parameter("max_range", 5.0)
+        self.declare_parameter("min_range", 0.15)
+        self.declare_parameter("median_window", 3)
 
-        self.sub = self.create_subscription(
-            LaserScan, '/scan', self.scan_cb, 10)
-        self.pub = self.create_publisher(
-            LaserScan, '/scan_filtered', 10)
+        self.sub = self.create_subscription(LaserScan, "/scan", self.scan_cb, 10)
+        self.pub = self.create_publisher(LaserScan, "/scan_filtered", 10)
 
-        self.get_logger().info('Scan filter node started')
+        self.get_logger().info("Scan filter node started")
 
     def scan_cb(self, msg: LaserScan):
-        max_r = self.get_parameter('max_range').value
-        min_r = self.get_parameter('min_range').value
-        window = self.get_parameter('median_window').value
+        max_r = float(self.get_parameter("max_range").value)
+        min_r = float(self.get_parameter("min_range").value)
+        window = int(self.get_parameter("median_window").value)
 
-        ranges = np.array(msg.ranges, dtype=np.float32)
-
-        # Replace inf/nan with max_range
-        ranges = np.where(np.isfinite(ranges), ranges, max_r)
-
-        # Clip to valid range
-        ranges = np.clip(ranges, min_r, max_r)
-
-        # Median filter to reduce salt-and-pepper noise
-        if window > 1:
-            pad = window // 2
-            padded = np.pad(ranges, pad, mode='edge')
-            # Vectorized sliding median using stride tricks
-            shape = (len(ranges), window)
-            strides = (padded.strides[0], padded.strides[0])
-            windows = np.lib.stride_tricks.as_strided(padded, shape=shape, strides=strides)
-            ranges = np.median(windows, axis=1).astype(np.float32)
+        filtered = filter_scan_ranges(msg.ranges, max_r, min_r, window)
 
         out = LaserScan()
         out.header = msg.header
@@ -61,7 +38,7 @@ class ScanFilterNode(Node):
         out.scan_time = msg.scan_time
         out.range_min = min_r
         out.range_max = max_r
-        out.ranges = ranges.tolist()
+        out.ranges = filtered.tolist()
         self.pub.publish(out)
 
 
@@ -77,5 +54,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

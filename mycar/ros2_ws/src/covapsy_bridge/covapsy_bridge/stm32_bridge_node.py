@@ -1,188 +1,332 @@
-"""STM32 HAT Bridge Node for COVAPSY autonomous racing car.
+"""COVAPSY actuator bridge with pluggable backends: spi, uart, pi_pwm."""
 
-Bridges ROS2 topics to/from the STM32 HAT PCB via UART.
-The STM32 controls: ESC PWM, steering servo PWM, reads encoder + rear IR.
+from __future__ import annotations
 
-Protocol adapted from professor's CoVAPSy_DemoSimple_STM32 firmware:
-  - Direction: set_direction_degres(float) -> range [-18, +18] degrees
-  - Speed: set_vitesse_m_s(float) -> range [-8.0, +2.0] m/s (soft limit 2.0 fwd)
-  - LiDAR data: 360 x uint16 mm array from STM32 (if STM32 handles LiDAR)
-
-Communication uses a simple binary protocol over /dev/ttyAMA0 at 115200 baud.
-
-Frame format (Pi -> STM32):
-  [0xAA] [0x55] [CMD] [payload...] [CRC8]
-  CMD 0x01: Drive command  -> payload: steering_float(4B) + speed_float(4B)
-  CMD 0x04: TFT update     -> payload: mode(1B) + speed_float(4B)
-
-Frame format (STM32 -> Pi):
-  [0xAA] [0x55] [CMD] [payload...] [CRC8]
-  CMD 0x02: Speed telemetry -> payload: speed_float(4B)
-  CMD 0x03: Rear IR         -> payload: state(1B)
-"""
+import struct
+import time
+from typing import Optional
 
 import rclpy
-from rclpy.node import Node
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Float32, Bool, String
-import struct
+from rclpy.node import Node
+from std_msgs.msg import Bool
+from std_msgs.msg import Float32
+from std_msgs.msg import String
+
+from covapsy_bridge.command_mapping import DriveLimits
+from covapsy_bridge.command_mapping import PwmCalibration
+from covapsy_bridge.command_mapping import build_spi_frame_6b
+from covapsy_bridge.command_mapping import build_uart_drive_frame
+from covapsy_bridge.command_mapping import clamp_drive_command
+from covapsy_bridge.command_mapping import parse_spi_frame_6b
+from covapsy_bridge.command_mapping import pwm_duties_from_command
 
 
 class STM32BridgeNode(Node):
+    """Bridge ROS2 drive topics to hardware backends."""
 
-    def __init__(self):
-        super().__init__('stm32_bridge')
+    def __init__(self) -> None:
+        super().__init__("stm32_bridge")
 
-        # Parameters
-        self.declare_parameter('serial_port', '/dev/ttyAMA0')
-        self.declare_parameter('baudrate', 115200)
-        self.declare_parameter('watchdog_timeout', 0.25)
-        self.declare_parameter('max_steering_deg', 18.0)
-        self.declare_parameter('max_speed_fwd', 2.0)
-        self.declare_parameter('max_speed_rev', -8.0)
+        # Common parameters
+        self.declare_parameter("backend", "spi")
+        self.declare_parameter("watchdog_timeout", 0.25)
+        self.declare_parameter("max_steering_deg", 18.0)
+        self.declare_parameter("max_speed_fwd", 2.0)
+        self.declare_parameter("max_speed_rev", -4.0)
 
-        port = self.get_parameter('serial_port').value
-        baud = self.get_parameter('baudrate').value
+        # UART parameters
+        self.declare_parameter("uart_port", "/dev/ttyAMA0")
+        self.declare_parameter("uart_baudrate", 115200)
 
-        # Try to open serial port
-        self.ser = None
+        # SPI parameters
+        self.declare_parameter("spi_bus", 0)
+        self.declare_parameter("spi_device", 1)
+        self.declare_parameter("spi_speed_hz", 1000000)
+        self.declare_parameter("spi_mode", 0)
+        self.declare_parameter("spi_header_0", 0x55)
+        self.declare_parameter("spi_header_1", 0x55)
+        self.declare_parameter("spi_steering_index", 2)
+        self.declare_parameter("spi_speed_index", 3)
+        self.declare_parameter("spi_flags_index", 4)
+
+        # pi_pwm parameters
+        self.declare_parameter("pwm_hz", 50)
+        self.declare_parameter("pwm_prop_channel", 0)
+        self.declare_parameter("pwm_dir_channel", 1)
+        self.declare_parameter("pwm_prop_stop", 7.5)
+        self.declare_parameter("pwm_prop_deadband", 0.4)
+        self.declare_parameter("pwm_prop_delta_max", 1.5)
+        self.declare_parameter("pwm_speed_hard", 8.0)
+        self.declare_parameter("pwm_direction_sign", -1.0)
+        self.declare_parameter("pwm_angle_deg_max", 18.0)
+        self.declare_parameter("pwm_angle_min", 5.5)
+        self.declare_parameter("pwm_angle_max", 9.3)
+        self.declare_parameter("pwm_angle_center", 7.4)
+
+        # ROS interface
+        self.create_subscription(Twist, "/cmd_vel", self.cmd_callback, 20)
+        self.create_subscription(String, "/tft_command", self.tft_callback, 10)
+
+        self.speed_pub = self.create_publisher(Float32, "/wheel_speed", 10)
+        self.rear_pub = self.create_publisher(Bool, "/rear_obstacle", 10)
+        self.status_pub = self.create_publisher(String, "/mcu_status", 10)
+
+        self.backend = str(self.get_parameter("backend").value).lower()
+        self.watchdog_timeout = float(self.get_parameter("watchdog_timeout").value)
+
+        self.limits = DriveLimits(
+            max_steering_deg=float(self.get_parameter("max_steering_deg").value),
+            max_speed_fwd=float(self.get_parameter("max_speed_fwd").value),
+            max_speed_rev=float(self.get_parameter("max_speed_rev").value),
+        )
+        self.pwm_cal = PwmCalibration(
+            prop_stop=float(self.get_parameter("pwm_prop_stop").value),
+            prop_deadband=float(self.get_parameter("pwm_prop_deadband").value),
+            prop_delta_max=float(self.get_parameter("pwm_prop_delta_max").value),
+            speed_hard=float(self.get_parameter("pwm_speed_hard").value),
+            direction_sign=float(self.get_parameter("pwm_direction_sign").value),
+            angle_deg_max=float(self.get_parameter("pwm_angle_deg_max").value),
+            angle_min=float(self.get_parameter("pwm_angle_min").value),
+            angle_max=float(self.get_parameter("pwm_angle_max").value),
+            angle_center=float(self.get_parameter("pwm_angle_center").value),
+        )
+
+        self.serial = None
+        self.spi = None
+        self.pwm_prop = None
+        self.pwm_dir = None
+
+        self.current_steering_deg = 0.0
+        self.current_speed_m_s = 0.0
+        self.last_cmd_time = time.monotonic()
+        self.last_status = "starting"
+
+        self._init_backend()
+
+        self.create_timer(0.01, self.poll_backend)
+        self.create_timer(0.05, self.watchdog_check)
+        self.create_timer(1.0, self.publish_status)
+
+        self.get_logger().info(f"STM32 bridge started with backend='{self.backend}'")
+
+    def _init_backend(self) -> None:
+        if self.backend == "uart":
+            self._init_uart_backend()
+        elif self.backend == "spi":
+            self._init_spi_backend()
+        elif self.backend == "pi_pwm":
+            self._init_pwm_backend()
+        else:
+            self.last_status = f"error:unknown_backend:{self.backend}"
+            self.get_logger().error(self.last_status)
+
+    def _init_uart_backend(self) -> None:
+        port = str(self.get_parameter("uart_port").value)
+        baud = int(self.get_parameter("uart_baudrate").value)
         try:
             import serial
-            self.ser = serial.Serial(port, baud, timeout=0.01)
-            self.get_logger().info(f'Serial port opened: {port} @ {baud}')
-        except Exception as e:
-            self.get_logger().warn(
-                f'Cannot open serial port {port}: {e}. '
-                'Running in dry-run mode (no hardware).'
-            )
 
-        # Subscribers: commands FROM ROS2 TO STM32
-        self.cmd_sub = self.create_subscription(
-            Twist, '/cmd_vel', self.cmd_callback, 10)
-        self.tft_sub = self.create_subscription(
-            String, '/tft_command', self.tft_callback, 10)
+            self.serial = serial.Serial(port, baud, timeout=0.01)
+            self.last_status = f"ok:uart:{port}@{baud}"
+        except Exception as exc:
+            self.last_status = f"error:uart_open:{exc}"
+            self.get_logger().warn(self.last_status)
 
-        # Publishers: data FROM STM32 TO ROS2
-        self.speed_pub = self.create_publisher(Float32, '/wheel_speed', 10)
-        self.rear_ir_pub = self.create_publisher(Bool, '/rear_obstacle', 10)
+    def _init_spi_backend(self) -> None:
+        bus = int(self.get_parameter("spi_bus").value)
+        dev = int(self.get_parameter("spi_device").value)
+        speed = int(self.get_parameter("spi_speed_hz").value)
+        mode = int(self.get_parameter("spi_mode").value)
+        try:
+            import spidev
 
-        # Timer to read STM32 data at 100 Hz
-        self.create_timer(0.01, self.read_stm32)
+            self.spi = spidev.SpiDev()
+            self.spi.open(bus, dev)
+            self.spi.max_speed_hz = speed
+            self.spi.mode = mode
+            self.last_status = f"ok:spi:bus{bus}.dev{dev}@{speed}"
+        except Exception as exc:
+            self.last_status = f"error:spi_open:{exc}"
+            self.get_logger().warn(self.last_status)
 
-        # Watchdog: if no command in 250ms, send zero
-        self.last_cmd_time = self.get_clock().now()
-        timeout = self.get_parameter('watchdog_timeout').value
-        self.create_timer(0.05, self.watchdog_check)
+    def _init_pwm_backend(self) -> None:
+        hz = int(self.get_parameter("pwm_hz").value)
+        prop_channel = int(self.get_parameter("pwm_prop_channel").value)
+        dir_channel = int(self.get_parameter("pwm_dir_channel").value)
+        try:
+            from rpi_hardware_pwm import HardwarePWM
 
-        self.get_logger().info('STM32 bridge node started')
+            self.pwm_prop = HardwarePWM(pwm_channel=prop_channel, hz=hz)
+            self.pwm_dir = HardwarePWM(pwm_channel=dir_channel, hz=hz)
+            self.pwm_prop.start(float(self.pwm_cal.prop_stop))
+            self.pwm_dir.start(float(self.pwm_cal.angle_center))
+            self.last_status = f"ok:pi_pwm:prop{prop_channel}/dir{dir_channel}"
+        except Exception as exc:
+            self.last_status = f"error:pi_pwm_init:{exc}"
+            self.get_logger().warn(self.last_status)
 
-    def cmd_callback(self, msg: Twist):
-        """Convert Twist to steering angle (degrees) + speed (m/s) and send to STM32."""
-        self.last_cmd_time = self.get_clock().now()
-
-        max_steer = self.get_parameter('max_steering_deg').value
-        max_fwd = self.get_parameter('max_speed_fwd').value
-        max_rev = self.get_parameter('max_speed_rev').value
-
-        # angular.z is steering in radians -> convert to degrees
-        # Clip to STM32 limits
-        import math
-        steering_deg = math.degrees(msg.angular.z)
-        steering_deg = max(-max_steer, min(max_steer, steering_deg))
-
-        # linear.x is speed in m/s
-        speed = msg.linear.x
-        speed = max(max_rev, min(max_fwd, speed))
-
+    def cmd_callback(self, msg: Twist) -> None:
+        steering_deg, speed = clamp_drive_command(msg.angular.z, msg.linear.x, self.limits)
+        self.current_steering_deg = steering_deg
+        self.current_speed_m_s = speed
+        self.last_cmd_time = time.monotonic()
         self._send_drive(steering_deg, speed)
 
-    def tft_callback(self, msg: String):
-        """Forward TFT display command to STM32."""
-        if self.ser is None:
+    def tft_callback(self, msg: String) -> None:
+        if self.backend != "uart" or self.serial is None:
             return
-        # Send as raw string terminated with newline
         try:
-            self.ser.write((msg.data + '\n').encode('ascii'))
+            self.serial.write((msg.data + "\n").encode("ascii", errors="ignore"))
         except Exception:
             pass
 
-    def _send_drive(self, steering_deg: float, speed_m_s: float):
-        """Send drive command frame to STM32."""
-        if self.ser is None:
+    def _send_drive(self, steering_deg: float, speed_m_s: float) -> None:
+        if self.backend == "uart":
+            self._send_uart_drive(steering_deg, speed_m_s)
+        elif self.backend == "spi":
+            self._send_spi_drive(steering_deg, speed_m_s)
+        elif self.backend == "pi_pwm":
+            self._send_pwm_drive(steering_deg, speed_m_s)
+
+    def _send_uart_drive(self, steering_deg: float, speed_m_s: float) -> None:
+        if self.serial is None:
             return
-
-        payload = struct.pack('<ff', steering_deg, speed_m_s)
-        frame = bytes([0xAA, 0x55, 0x01]) + payload
-        frame += bytes([self._crc8(frame)])
+        frame = build_uart_drive_frame(steering_deg, speed_m_s)
         try:
-            self.ser.write(frame)
-        except Exception as e:
-            self.get_logger().warn(f'Serial write error: {e}')
+            self.serial.write(frame)
+        except Exception as exc:
+            self.last_status = f"error:uart_write:{exc}"
 
-    def read_stm32(self):
-        """Read telemetry frames from STM32."""
-        if self.ser is None:
+    def _send_spi_drive(self, steering_deg: float, speed_m_s: float) -> None:
+        if self.spi is None:
             return
-
+        frame = build_spi_frame_6b(
+            steering_deg=steering_deg,
+            speed_m_s=speed_m_s,
+            limits=self.limits,
+            header0=int(self.get_parameter("spi_header_0").value),
+            header1=int(self.get_parameter("spi_header_1").value),
+            steering_index=int(self.get_parameter("spi_steering_index").value),
+            speed_index=int(self.get_parameter("spi_speed_index").value),
+            flags_index=int(self.get_parameter("spi_flags_index").value),
+        )
         try:
-            while self.ser.in_waiting >= 8:
-                b = self.ser.read(1)
-                if b != b'\xAA':
+            rx = bytes(self.spi.xfer2(list(frame)))
+            speed, rear = parse_spi_frame_6b(
+                rx,
+                limits=self.limits,
+                header0=int(self.get_parameter("spi_header_0").value),
+                header1=int(self.get_parameter("spi_header_1").value),
+                speed_index=int(self.get_parameter("spi_speed_index").value),
+                flags_index=int(self.get_parameter("spi_flags_index").value),
+            )
+            self._publish_speed(speed)
+            self._publish_rear(rear)
+        except Exception as exc:
+            self.last_status = f"error:spi_xfer:{exc}"
+
+    def _send_pwm_drive(self, steering_deg: float, speed_m_s: float) -> None:
+        if self.pwm_prop is None or self.pwm_dir is None:
+            return
+        prop_duty, dir_duty = pwm_duties_from_command(speed_m_s, steering_deg, self.pwm_cal)
+        try:
+            self.pwm_prop.change_duty_cycle(prop_duty)
+            self.pwm_dir.change_duty_cycle(dir_duty)
+            # Estimated telemetry in direct-Pi mode.
+            self._publish_speed(speed_m_s)
+            self._publish_rear(False)
+        except Exception as exc:
+            self.last_status = f"error:pi_pwm_write:{exc}"
+
+    def poll_backend(self) -> None:
+        if self.backend == "uart" and self.serial is not None:
+            self._poll_uart()
+
+    def _poll_uart(self) -> None:
+        """Parse minimal UART telemetry frames from STM32."""
+        try:
+            while self.serial.in_waiting >= 8:
+                if self.serial.read(1) != b"\xAA":
                     continue
-                b = self.ser.read(1)
-                if b != b'\x55':
+                if self.serial.read(1) != b"\x55":
                     continue
 
-                msg_type_raw = self.ser.read(1)
+                msg_type_raw = self.serial.read(1)
                 if len(msg_type_raw) < 1:
                     continue
                 msg_type = msg_type_raw[0]
 
-                if msg_type == 0x02:  # Speed telemetry
-                    data = self.ser.read(5)  # 4B float + 1B CRC
+                if msg_type == 0x02:
+                    data = self.serial.read(5)
                     if len(data) >= 4:
-                        speed = struct.unpack('<f', data[:4])[0]
-                        msg = Float32()
-                        msg.data = speed
-                        self.speed_pub.publish(msg)
-
-                elif msg_type == 0x03:  # Rear IR
-                    data = self.ser.read(2)  # 1B bool + 1B CRC
+                        speed = struct.unpack("<f", data[:4])[0]
+                        self._publish_speed(speed)
+                elif msg_type == 0x03:
+                    data = self.serial.read(2)
                     if len(data) >= 1:
-                        msg = Bool()
-                        msg.data = bool(data[0])
-                        self.rear_ir_pub.publish(msg)
+                        self._publish_rear(bool(data[0]))
+                else:
+                    _ = self.serial.read(1)
         except Exception:
             pass
 
-    def watchdog_check(self):
-        """Send zero command if no cmd received recently."""
-        elapsed = (self.get_clock().now() - self.last_cmd_time).nanoseconds / 1e9
-        timeout = self.get_parameter('watchdog_timeout').value
-        if elapsed > timeout:
+    def watchdog_check(self) -> None:
+        if (time.monotonic() - self.last_cmd_time) > self.watchdog_timeout:
+            if abs(self.current_speed_m_s) > 1e-3 or abs(self.current_steering_deg) > 1e-3:
+                self.current_speed_m_s = 0.0
+                self.current_steering_deg = 0.0
+                self._send_drive(0.0, 0.0)
+
+    def _publish_speed(self, speed_m_s: float) -> None:
+        msg = Float32()
+        msg.data = float(speed_m_s)
+        self.speed_pub.publish(msg)
+
+    def _publish_rear(self, rear_obstacle: bool) -> None:
+        msg = Bool()
+        msg.data = bool(rear_obstacle)
+        self.rear_pub.publish(msg)
+
+    def publish_status(self) -> None:
+        msg = String()
+        msg.data = f"backend={self.backend};{self.last_status}"
+        self.status_pub.publish(msg)
+
+    def destroy_node(self) -> bool:
+        try:
             self._send_drive(0.0, 0.0)
+        except Exception:
+            pass
 
-    @staticmethod
-    def _crc8(data: bytes) -> int:
-        crc = 0
-        for b in data:
-            crc ^= b
-            for _ in range(8):
-                if crc & 0x80:
-                    crc = (crc << 1) ^ 0x07
-                else:
-                    crc <<= 1
-                crc &= 0xFF
-        return crc
+        if self.serial is not None:
+            try:
+                self.serial.close()
+            except Exception:
+                pass
 
-    def destroy_node(self):
-        if self.ser is not None:
-            self._send_drive(0.0, 0.0)
-            self.ser.close()
-        super().destroy_node()
+        if self.spi is not None:
+            try:
+                self.spi.close()
+            except Exception:
+                pass
+
+        if self.pwm_prop is not None:
+            try:
+                self.pwm_prop.stop()
+            except Exception:
+                pass
+
+        if self.pwm_dir is not None:
+            try:
+                self.pwm_dir.stop()
+            except Exception:
+                pass
+
+        return super().destroy_node()
 
 
-def main(args=None):
+def main(args=None) -> None:
     rclpy.init(args=args)
     node = STM32BridgeNode()
     try:
@@ -194,5 +338,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -1,0 +1,11 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# Test caches
+.pytest_cache/
+pytest-cache-files-*/
+
+# Webots/editor lock artifacts
+.~lock.*
+
