@@ -138,3 +138,78 @@ def test_gap_selection_prefers_clearer_gap_over_only_wider_gap():
     chosen = covapsy_standalone.choose_best_gap(front_ranges, front_angles, gaps)
 
     assert chosen == (7, 11)
+
+
+def test_adaptive_safety_radius_narrow_passage():
+    """In a narrow passage (~0.85m), safety radius should shrink."""
+    ranges = make_ranges()
+    set_sector(ranges, 40, 80, 0.42)
+    set_sector(ranges, -80, -40, 0.43)
+    _idx, front_ranges, front_angles = covapsy_standalone.front_sector(ranges)
+    radius = covapsy_standalone.adaptive_safety_radius(front_ranges, front_angles)
+    assert radius < covapsy_standalone.SAFETY_RADIUS_M
+
+
+def test_adaptive_safety_radius_wide_passage():
+    """In a wide passage (>1.5m), full safety radius should be used."""
+    ranges = make_ranges()
+    set_sector(ranges, 40, 80, 1.2)
+    set_sector(ranges, -80, -40, 1.2)
+    _idx, front_ranges, front_angles = covapsy_standalone.front_sector(ranges)
+    radius = covapsy_standalone.adaptive_safety_radius(front_ranges, front_angles)
+    assert radius == covapsy_standalone.SAFETY_RADIUS_M
+
+
+def test_curvature_speed_limit_straight():
+    """Symmetric ranges (straight) should not reduce speed."""
+    ranges = make_ranges(2.0)
+    cap = 2.5
+    result = covapsy_standalone.estimate_curvature_speed_limit(ranges, cap)
+    assert result == cap
+
+
+def test_curvature_speed_limit_curve():
+    """Asymmetric ranges (curve) should reduce speed."""
+    ranges = make_ranges(2.0)
+    set_sector(ranges, 5, 40, 0.6)  # left side short = left curve
+    cap = 2.5
+    result = covapsy_standalone.estimate_curvature_speed_limit(ranges, cap)
+    assert result < cap
+
+
+def test_escalating_recovery_alternates_direction():
+    """Consecutive recoveries should alternate steering direction and escalate."""
+    ranges = make_ranges()
+    set_sector(ranges, -10, 10, 0.20)
+
+    _, steer_0, dur_0, dir_0 = covapsy_standalone.escalating_recovery(ranges, 0, 0)
+    _, steer_1, dur_1, dir_1 = covapsy_standalone.escalating_recovery(ranges, 1, dir_0)
+    _, steer_2, dur_2, dir_2 = covapsy_standalone.escalating_recovery(ranges, 2, dir_1)
+
+    # Direction alternates
+    assert dir_1 == -dir_0
+    assert dir_2 == -dir_1
+    # Duration escalates at strategy 2
+    assert dur_2 > dur_0
+    # All have non-zero steering
+    assert steer_0 != 0.0
+    assert steer_1 != 0.0
+    assert steer_2 != 0.0
+
+
+def test_wider_fov_finds_gap_in_tight_curve():
+    """With wider FOV, a gap in a tight curve should be found and steered toward."""
+    ranges = make_ranges()
+    # Simulate a tight left curve with track walls on both sides
+    set_sector(ranges, -30, 60, 0.03)    # front blocked (approaching wall)
+    set_sector(ranges, -100, -40, 0.35)  # right track border (inner wall)
+    set_sector(ranges, 70, 100, 2.0)     # exit gap to the left (curve exit)
+
+    steering, speed = covapsy_standalone.advanced_gap_follower(
+        ranges,
+        covapsy_standalone.DEFAULT_MAX_SPEED_M_S,
+    )
+
+    # Should find the gap and steer toward it (positive = left)
+    assert steering > 0.0
+    assert speed > 0.0

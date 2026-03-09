@@ -42,24 +42,25 @@ MAX_STEERING_RAD = math.radians(MAX_STEERING_DEG)
 CAR_WIDTH_M = 0.30
 MAX_LIDAR_RANGE_M = 5.0
 MIN_VALID_RANGE_M = 0.05
-FRONT_FOV_DEG = 115
+FRONT_FOV_DEG = 150
+GAP_SELECTION_FOV_DEG = 105
 
 # Controller tuning
-DISPARITY_THRESHOLD_M = 0.28
+DISPARITY_THRESHOLD_M = 0.38
 SAFETY_RADIUS_M = 0.20
 MIN_SPEED_FLOOR_M_S = 0.16
 BASE_MIN_SPEED_M_S = 0.32
 RACE_PROFILE_SPEED_CAPS = {
     "HOMOLOGATION": 0.8,
     "RACE_STABLE": 2.5,
-    "RACE_AGGRESSIVE": 3.2,
+    "RACE_AGGRESSIVE": 2.8,
 }
 DEFAULT_RACE_PROFILE = "RACE_AGGRESSIVE"
 DEFAULT_MAX_SPEED_M_S = RACE_PROFILE_SPEED_CAPS[DEFAULT_RACE_PROFILE]
 MAX_SPEED_LIMIT_M_S = RACE_PROFILE_SPEED_CAPS["RACE_AGGRESSIVE"]
 SPEED_RAMP_UP_M_S = 0.060
 SPEED_RAMP_DOWN_M_S = 0.10
-REVERSE_SPEED_M_S = -0.55
+REVERSE_SPEED_M_S = -0.60
 REVERSE_STEPS = 28
 EMERGENCY_STUCK_STEPS = 6
 EMERGENCY_FRONT_WINDOW_DEG = 12
@@ -71,27 +72,37 @@ WRONG_SIDE_DAMPING = 0.35
 CLEARANCE_DIFF_THRESHOLD_M = 0.18
 SIDE_CLEAR_MIN_DEG = 22
 SIDE_CLEAR_MAX_DEG = 85
-STEERING_RATE_LIMIT_RAD = math.radians(2.2)
-STEERING_LOW_PASS_ALPHA = 0.72
+STEERING_RATE_LIMIT_RAD = math.radians(3.5)
+STEERING_LOW_PASS_ALPHA = 0.80
 REVERSE_STEERING_MAX_RAD = math.radians(13.0)
-GAP_SCORE_WIDTH_WEIGHT = 0.45
+GAP_SCORE_WIDTH_WEIGHT = 0.40
 GAP_SCORE_CLEARANCE_WEIGHT = 0.45
-GAP_SCORE_HEADING_WEIGHT = 0.10
+GAP_SCORE_HEADING_WEIGHT = 0.20
 GAP_EDGE_PENALTY = 0.22
 SPEED_LOOKAHEAD_WINDOW_DEG = 14
 SPEED_TTC_WINDOW_DEG = 8
-SPEED_TARGET_TTC_SEC = 1.15
+SPEED_TARGET_TTC_SEC = 1.30
 
 # Cornering and anti-stall knobs
-CORNER_TRIGGER_DIST_M = 0.65
+CORNER_TRIGGER_DIST_M = 0.80
 CORNER_BIAS_MAX_RAD = math.radians(7.0)
 CORNER_CLEARANCE_REF_M = 0.9
 NO_PROGRESS_SPEED_CMD_M_S = 0.28
 NO_PROGRESS_SPEED_ACTUAL_M_S = 0.05
 NO_PROGRESS_FRONT_DIST_M = 0.50
-NO_PROGRESS_TRIGGER_STEPS = 20
+NO_PROGRESS_TRIGGER_STEPS = 15
 EARLY_STALL_WINDOW_DIST_M = 0.30
-EARLY_STALL_TRIGGER_STEPS = 14
+EARLY_STALL_TRIGGER_STEPS = 10
+
+# Curvature-aware speed control
+CURVATURE_LOOKAHEAD_HALF_DEG = 40
+CURVATURE_SPEED_REDUCTION_FACTOR = 0.55
+CURVATURE_TRIGGER_RATIO = 0.45
+
+# Escalating recovery
+RECOVERY_ESCALATION_WINDOW_STEPS = 150  # ~5 seconds at 32ms
+REVERSE_STEPS_LONG = 45
+REVERSE_SPEED_HARD_M_S = -0.70
 
 # Camera guidance knobs (color + depth)
 RGB_CAMERA_CANDIDATES = ("RealSenseRGB", "RGB_camera", "camera")
@@ -306,6 +317,75 @@ def adaptive_min_speed(nearest_dist, steering_rad):
     return clamp(min_speed, MIN_SPEED_FLOOR_M_S, BASE_MIN_SPEED_M_S)
 
 
+def adaptive_safety_radius(front_ranges, front_angles):
+    """Reduce safety radius when the passage is narrow to avoid blocking all paths."""
+    left_clear, right_clear = side_clearances(front_ranges, front_angles)
+    passage_width = left_clear + right_clear
+    MIN_SAFETY = 0.08
+    MAX_SAFETY = SAFETY_RADIUS_M
+    NARROW_THRESHOLD = 0.90
+    WIDE_THRESHOLD = 1.50
+    if passage_width >= WIDE_THRESHOLD:
+        return MAX_SAFETY
+    if passage_width <= NARROW_THRESHOLD:
+        return MIN_SAFETY
+    t = (passage_width - NARROW_THRESHOLD) / (WIDE_THRESHOLD - NARROW_THRESHOLD)
+    return MIN_SAFETY + t * (MAX_SAFETY - MIN_SAFETY)
+
+
+def estimate_curvature_speed_limit(ranges, speed_cap_m_s):
+    """Estimate upcoming curvature from LiDAR range asymmetry and limit speed."""
+    left_ranges = []
+    right_ranges = []
+    for deg in range(5, CURVATURE_LOOKAHEAD_HALF_DEG + 1):
+        left_ranges.append(ranges[deg % 360])
+        right_ranges.append(ranges[(-deg) % 360])
+
+    if not left_ranges or not right_ranges:
+        return speed_cap_m_s
+
+    left_avg = sum(left_ranges) / len(left_ranges)
+    right_avg = sum(right_ranges) / len(right_ranges)
+    total_avg = 0.5 * (left_avg + right_avg)
+
+    if total_avg < 0.01:
+        return speed_cap_m_s
+
+    asymmetry = abs(left_avg - right_avg) / total_avg
+
+    if asymmetry < CURVATURE_TRIGGER_RATIO:
+        return speed_cap_m_s
+
+    reduction = 1.0 - CURVATURE_SPEED_REDUCTION_FACTOR * clamp(
+        (asymmetry - CURVATURE_TRIGGER_RATIO) / (1.0 - CURVATURE_TRIGGER_RATIO), 0.0, 1.0
+    )
+    return max(speed_cap_m_s * reduction, MIN_SPEED_FLOOR_M_S)
+
+
+def escalating_recovery(ranges, recovery_count, last_direction):
+    """Multi-strategy recovery that escalates with consecutive stalls.
+
+    Returns (speed, steering, duration, new_direction).
+    """
+    _idx, front_ranges, front_angles = front_sector(ranges)
+    left_clear, right_clear = side_clearances(front_ranges, front_angles)
+
+    if recovery_count == 0:
+        steer = compute_reverse_steering(ranges)
+        direction = 1 if steer > 0 else -1
+        return REVERSE_SPEED_M_S, steer, REVERSE_STEPS, direction
+
+    elif recovery_count == 1:
+        direction = -last_direction if last_direction != 0 else (1 if left_clear > right_clear else -1)
+        steer = direction * REVERSE_STEERING_MAX_RAD
+        return REVERSE_SPEED_M_S, steer, REVERSE_STEPS, direction
+
+    else:
+        direction = -last_direction if last_direction != 0 else 1
+        steer = direction * MAX_STEERING_RAD
+        return REVERSE_SPEED_HARD_M_S, steer, REVERSE_STEPS_LONG, direction
+
+
 def extract_camera_guidance(rgb_camera, depth_camera):
     if rgb_camera is None:
         return {
@@ -510,13 +590,13 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
 
     reference_ranges = front_ranges.copy()
 
-    # 1) Disparity extension
+    # 1) Disparity extension (use reference_ranges to detect edges, avoiding cascade)
     half_width = CAR_WIDTH_M * 0.5
     angle_step = (2.0 * math.pi) / 360.0
     for i in range(1, len(front_ranges)):
-        if abs(front_ranges[i] - front_ranges[i - 1]) > DISPARITY_THRESHOLD_M:
-            closer_idx = i if front_ranges[i] < front_ranges[i - 1] else i - 1
-            closer_range = front_ranges[closer_idx]
+        if abs(reference_ranges[i] - reference_ranges[i - 1]) > DISPARITY_THRESHOLD_M:
+            closer_idx = i if reference_ranges[i] < reference_ranges[i - 1] else i - 1
+            closer_range = reference_ranges[closer_idx]
             if closer_range > MIN_VALID_RANGE_M:
                 extend_angle = math.atan2(half_width, closer_range)
                 extend_count = int(extend_angle / angle_step)
@@ -525,7 +605,8 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
                 for j in range(lo, hi):
                     front_ranges[j] = min(front_ranges[j], closer_range)
 
-    # 2) Safety bubble around nearest obstacle
+    # 2) Safety bubble around nearest obstacle (adaptive radius in narrow passages)
+    effective_safety_radius = adaptive_safety_radius(reference_ranges, front_angles)
     nearest_idx = min(
         range(len(reference_ranges)),
         key=lambda idx: reference_ranges[idx] + 0.45 * abs(front_angles[idx]),
@@ -536,17 +617,23 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
         arc_scale = max(nearest_dist, MIN_VALID_RANGE_M)
         for i in range(len(front_ranges)):
             arc_dist = arc_scale * abs(front_angles[i] - nearest_angle)
-            if arc_dist < SAFETY_RADIUS_M:
+            if arc_dist < effective_safety_radius:
                 front_ranges[i] = 0.0
 
-    # 3) Best free gap (width + clearance score)
+    # 3) Mask out far-shoulder regions to prevent phantom gap selection
+    gap_limit_rad = math.radians(GAP_SELECTION_FOV_DEG)
+    for i in range(len(front_ranges)):
+        if abs(front_angles[i]) > gap_limit_rad:
+            front_ranges[i] = 0.0
+
+    # 4) Best free gap (width + clearance score)
     traversable = [r > MIN_VALID_RANGE_M for r in front_ranges]
     free_gaps = find_free_gaps(traversable)
     best_gap = choose_best_gap(front_ranges, front_angles, free_gaps)
     if best_gap is None:
         return 0.0, 0.0
 
-    # 4) Best point in selected gap with center and heading bias.
+    # 5) Best point in selected gap with center and heading bias.
     gap_start, gap_end = best_gap
     gap_center = 0.5 * (gap_start + gap_end)
     gap_half_span = max(0.5 * (gap_end - gap_start + 1), 1.0)
@@ -562,7 +649,7 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
     forward_center_dist = forward_clearance_for_heading(reference_ranges, front_angles, 0.0, 12)
     corner_bias = compute_corner_bias(reference_ranges, front_angles, forward_center_dist)
 
-    # 5) Steering + speed adaptation
+    # 6) Steering + speed adaptation
     steering_rad = clamp(target_angle + corner_bias, -MAX_STEERING_RAD, MAX_STEERING_RAD)
     steering_rad = apply_turn_direction_sanity(steering_rad, reference_ranges, front_angles)
     projected_clearance = forward_clearance_for_heading(
@@ -707,9 +794,13 @@ def run_controller():
     use_advanced = True
     reverse_ticks = 0
     reverse_steering = 0.0
+    reverse_speed_current = REVERSE_SPEED_M_S
     stuck_counter = 0
     no_progress_counter = 0
     low_speed_stall_counter = 0
+    recovery_count = 0
+    recovery_cooldown = 0
+    last_recovery_direction = 0
     speed_cap = DEFAULT_MAX_SPEED_M_S
     smoothed_speed = 0.0
     prev_steering = 0.0
@@ -747,9 +838,13 @@ def run_controller():
                 auto_mode = True
                 reverse_ticks = 0
                 reverse_steering = 0.0
+                reverse_speed_current = REVERSE_SPEED_M_S
                 stuck_counter = 0
                 no_progress_counter = 0
                 low_speed_stall_counter = 0
+                recovery_count = 0
+                recovery_cooldown = 0
+                last_recovery_direction = 0
                 smoothed_speed = 0.0
                 prev_steering = 0.0
                 print("[standalone] auto mode ON")
@@ -795,30 +890,48 @@ def run_controller():
             no_progress_counter = 0
             low_speed_stall_counter = 0
             prev_steering = reverse_steering
-            set_drive_command(driver, reverse_steering, REVERSE_SPEED_M_S)
+            set_drive_command(driver, reverse_steering, reverse_speed_current)
             continue
 
         if emergency_front_blocked(ranges):
             stuck_counter += 1
             if stuck_counter > EMERGENCY_STUCK_STEPS:
-                reverse_ticks = REVERSE_STEPS
-                reverse_steering = compute_reverse_steering(ranges)
+                rev_speed, rev_steer, rev_duration, rev_dir = escalating_recovery(
+                    ranges, recovery_count, last_recovery_direction
+                )
+                reverse_ticks = rev_duration
+                reverse_steering = rev_steer
+                reverse_speed_current = rev_speed
+                last_recovery_direction = rev_dir
+                recovery_count += 1
+                recovery_cooldown = RECOVERY_ESCALATION_WINDOW_STEPS
                 stuck_counter = 0
                 no_progress_counter = 0
                 low_speed_stall_counter = 0
                 print(
-                    "[standalone] emergency reverse (front blocked) "
-                    f"steer={math.degrees(reverse_steering):.1f} deg"
+                    f"[standalone] emergency reverse (front blocked, strategy={recovery_count - 1}) "
+                    f"steer={math.degrees(rev_steer):.1f} deg "
+                    f"speed={rev_speed:.2f} duration={rev_duration}"
                 )
             set_drive_command(driver, 0.0, 0.0)
             continue
 
         stuck_counter = max(0, stuck_counter - 1)
 
+        # Decay recovery escalation cooldown
+        if recovery_cooldown > 0:
+            recovery_cooldown -= 1
+            if recovery_cooldown == 0:
+                recovery_count = 0
+
+        # Curvature-aware speed limiting
+        curvature_cap = estimate_curvature_speed_limit(ranges, speed_cap)
+        effective_cap = min(speed_cap, curvature_cap)
+
         if use_advanced:
-            steering, target_speed = advanced_gap_follower(ranges, speed_cap)
+            steering, target_speed = advanced_gap_follower(ranges, effective_cap)
         else:
-            steering, target_speed = simple_baseline(ranges, speed_cap)
+            steering, target_speed = simple_baseline(ranges, effective_cap)
 
         camera_state = extract_camera_guidance(rgb_camera, depth_camera)
         steering = blend_lidar_and_camera_steering(steering, camera_state)
@@ -859,14 +972,22 @@ def run_controller():
             no_progress_counter >= NO_PROGRESS_TRIGGER_STEPS
             or low_speed_stall_counter >= EARLY_STALL_TRIGGER_STEPS
         ):
-            reverse_ticks = REVERSE_STEPS
-            reverse_steering = compute_reverse_steering(ranges)
+            rev_speed, rev_steer, rev_duration, rev_dir = escalating_recovery(
+                ranges, recovery_count, last_recovery_direction
+            )
+            reverse_ticks = rev_duration
+            reverse_steering = rev_steer
+            reverse_speed_current = rev_speed
+            last_recovery_direction = rev_dir
+            recovery_count += 1
+            recovery_cooldown = RECOVERY_ESCALATION_WINDOW_STEPS
             no_progress_counter = 0
             low_speed_stall_counter = 0
             print(
-                "[standalone] stall recovery reverse "
+                f"[standalone] stall recovery (strategy={recovery_count - 1}) "
                 f"(front={front_dist:.2f}m, speed={speed_log_value:.2f}m/s, "
-                f"steer={math.degrees(reverse_steering):.1f} deg)"
+                f"steer={math.degrees(rev_steer):.1f} deg, "
+                f"rev_speed={rev_speed:.2f}, duration={rev_duration})"
             )
             continue
 
