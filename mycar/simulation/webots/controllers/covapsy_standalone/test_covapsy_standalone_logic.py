@@ -28,6 +28,26 @@ class _FakeLidar:
         return self._raw
 
 
+def _ackermann_inner_angle(center_angle_rad: float) -> float:
+    center_abs = abs(float(center_angle_rad))
+    if center_abs < 1e-12:
+        return 0.0
+    wheelbase = float(covapsy_standalone.WEBOTS_WHEELBASE_M)
+    track = float(covapsy_standalone.WEBOTS_TRACK_FRONT_M)
+    radius_center = wheelbase / math.tan(center_abs)
+    radius_inner = max(radius_center - (0.5 * track), 1e-9)
+    return math.atan(wheelbase / radius_inner)
+
+
+def test_max_steering_keeps_ackermann_inner_wheel_within_webots_limit():
+    inner_angle = _ackermann_inner_angle(covapsy_standalone.MAX_STEERING_RAD)
+    assert inner_angle <= covapsy_standalone.WEBOTS_STEERING_INNER_LIMIT_RAD + 1e-12
+
+
+def test_uturn_full_lock_does_not_exceed_max_steering_cap():
+    assert covapsy_standalone.UTURN_STEER_RAD <= covapsy_standalone.MAX_STEERING_RAD
+
+
 def test_symmetric_corridor_prefers_near_center():
     ranges = make_ranges()
     set_sector(ranges, 70, 100, 0.55)

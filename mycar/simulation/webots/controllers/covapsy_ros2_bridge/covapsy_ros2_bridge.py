@@ -66,6 +66,29 @@ def _build_scan_ranges(raw_ranges: List[float], max_range: float) -> List[float]
     return out
 
 
+def _ackermann_safe_center_limit(inner_limit_rad, wheelbase_m, track_front_m, margin_rad):
+    """Return max center steering so Ackermann inner wheel stays below inner_limit_rad."""
+    tan_inner = math.tan(float(inner_limit_rad))
+    if abs(tan_inner) < 1e-9:
+        return 0.0
+    center_limit = math.atan(
+        float(wheelbase_m) / ((float(wheelbase_m) / tan_inner) + (0.5 * float(track_front_m)))
+    )
+    return max(0.0, center_limit - float(margin_rad))
+
+
+_WEBOTS_WHEELBASE_M = 0.257
+_WEBOTS_TRACK_FRONT_M = 0.15
+_WEBOTS_STEERING_INNER_LIMIT_RAD = 0.35
+_WEBOTS_STEERING_MARGIN_RAD = 5e-4
+_SAFE_MAX_STEERING_RAD = _ackermann_safe_center_limit(
+    inner_limit_rad=_WEBOTS_STEERING_INNER_LIMIT_RAD,
+    wheelbase_m=_WEBOTS_WHEELBASE_M,
+    track_front_m=_WEBOTS_TRACK_FRONT_M,
+    margin_rad=_WEBOTS_STEERING_MARGIN_RAD,
+)
+
+
 # --------------- camera border detection (compact) ----------------
 _RGB_NAMES = ("RealSenseRGB", "RGB_camera", "camera")
 _DEPTH_NAMES = ("RealSenseDepth", "Depth_camera", "range-finder")
@@ -161,7 +184,7 @@ class WebotsRosBridge(Node):
         self.step_time_s = max(float(step_time_s), 1e-3)
 
         self.declare_parameter("max_speed_m_s", 2.5)
-        self.declare_parameter("max_steering_rad", 0.35)
+        self.declare_parameter("max_steering_rad", _SAFE_MAX_STEERING_RAD)
         self.declare_parameter("cmd_timeout_sec", 0.25)
         self.declare_parameter("wheelbase_m", 0.257)
         self.declare_parameter("scan_frame", "laser")
@@ -180,11 +203,24 @@ class WebotsRosBridge(Node):
         self.steering_cmd = 0.0
         self.speed_cmd = 0.0
         self.last_status_time = 0.0
+        self.safe_max_steering_rad = _SAFE_MAX_STEERING_RAD
+        self._steering_cap_warned = False
         self.get_logger().info("Webots ROS2 bridge started")
+
+    def _effective_max_steering(self) -> float:
+        configured = float(self.get_parameter("max_steering_rad").value)
+        effective = min(configured, self.safe_max_steering_rad)
+        if configured > self.safe_max_steering_rad and not self._steering_cap_warned:
+            self.get_logger().warn(
+                "max_steering_rad=%.4f exceeds safe Webots cap %.4f; clamping to safe cap."
+                % (configured, self.safe_max_steering_rad)
+            )
+            self._steering_cap_warned = True
+        return effective
 
     def _cmd_cb(self, msg: Twist) -> None:
         max_speed = float(self.get_parameter("max_speed_m_s").value)
-        max_steer = float(self.get_parameter("max_steering_rad").value)
+        max_steer = self._effective_max_steering()
         self.speed_cmd = max(-max_speed, min(max_speed, float(msg.linear.x)))
         self.steering_cmd = max(-max_steer, min(max_steer, float(msg.angular.z)))
         self.last_cmd_time = time.monotonic()
@@ -192,7 +228,7 @@ class WebotsRosBridge(Node):
     def apply_drive(self) -> None:
         timeout = float(self.get_parameter("cmd_timeout_sec").value)
         max_speed = float(self.get_parameter("max_speed_m_s").value)
-        max_steer = float(self.get_parameter("max_steering_rad").value)
+        max_steer = self._effective_max_steering()
 
         cmd_speed = self.speed_cmd
         cmd_steer = self.steering_cmd

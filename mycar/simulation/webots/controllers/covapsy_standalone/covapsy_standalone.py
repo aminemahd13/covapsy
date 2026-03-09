@@ -59,9 +59,29 @@ def env_flag(name, default=False):
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def ackermann_safe_center_limit(inner_limit_rad, wheelbase_m, track_front_m, margin_rad):
+    """Return max center steering so Ackermann inner wheel remains below inner_limit_rad."""
+    tan_inner = math.tan(float(inner_limit_rad))
+    if abs(tan_inner) < 1e-9:
+        return 0.0
+    center_limit = math.atan(
+        float(wheelbase_m) / ((float(wheelbase_m) / tan_inner) + (0.5 * float(track_front_m)))
+    )
+    return max(0.0, center_limit - float(margin_rad))
+
+
 # Car / sensor constants
-MAX_STEERING_DEG = 18.5
-MAX_STEERING_RAD = math.radians(MAX_STEERING_DEG)
+WEBOTS_WHEELBASE_M = 0.257
+WEBOTS_TRACK_FRONT_M = 0.15
+WEBOTS_STEERING_INNER_LIMIT_RAD = 0.35
+WEBOTS_STEERING_MARGIN_RAD = 5e-4
+MAX_STEERING_RAD = ackermann_safe_center_limit(
+    inner_limit_rad=WEBOTS_STEERING_INNER_LIMIT_RAD,
+    wheelbase_m=WEBOTS_WHEELBASE_M,
+    track_front_m=WEBOTS_TRACK_FRONT_M,
+    margin_rad=WEBOTS_STEERING_MARGIN_RAD,
+)
+MAX_STEERING_DEG = math.degrees(MAX_STEERING_RAD)
 CAR_WIDTH_M = 0.30
 MAX_LIDAR_RANGE_M = 5.0
 MIN_VALID_RANGE_M = 0.05
