@@ -10,7 +10,7 @@ SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 SIM_DIR="$PROJECT_DIR/simulation/webots"
 WORLD_ROS2="$SIM_DIR/worlds/Piste_CoVAPSy_2025a_ros2.wbt"
-WORLD_STANDALONE="$SIM_DIR/worlds/Piste_CoVAPSy_2025a.wbt"
+WORLD_STANDALONE="$SIM_DIR/worlds/Piste_CoVAPSy_2025a_standalone.wbt"
 
 echo "=========================================="
 echo "  COVAPSY Webots Simulation Setup"
