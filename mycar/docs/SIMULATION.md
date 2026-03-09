@@ -16,6 +16,10 @@ If Webots is not in the default location:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1 -WebotsExe "C:\Path\To\webotsw.exe"
 ```
+Common Webots Windows install path:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1 -WebotsExe "C:\Program Files\Webots\msys64\mingw64\bin\webotsw.exe"
+```
 
 ### World/controller used
 - World: `simulation/webots/worlds/Piste_CoVAPSy_2025a_standalone.wbt`

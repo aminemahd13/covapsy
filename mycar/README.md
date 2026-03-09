@@ -25,6 +25,10 @@ Run from PowerShell:
 cd mycar
 powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1
 ```
+If needed, pass your explicit executable path:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1 -WebotsExe "C:\Program Files\Webots\msys64\mingw64\bin\webotsw.exe"
+```
 
 World/controller used:
 - `simulation/webots/worlds/Piste_CoVAPSy_2025a_standalone.wbt`

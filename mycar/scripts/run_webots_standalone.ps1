@@ -19,11 +19,15 @@ if ($WebotsExe) {
 if ($env:WEBOTS_HOME) {
     $candidates += (Join-Path $env:WEBOTS_HOME "webotsw.exe")
     $candidates += (Join-Path $env:WEBOTS_HOME "webots.exe")
+    $candidates += (Join-Path $env:WEBOTS_HOME "msys64\mingw64\bin\webotsw.exe")
+    $candidates += (Join-Path $env:WEBOTS_HOME "msys64\mingw64\bin\webots.exe")
 }
 
 $candidates += @(
     "C:\Program Files\Webots\webotsw.exe",
-    "C:\Program Files\Webots\webots.exe"
+    "C:\Program Files\Webots\webots.exe",
+    "C:\Program Files\Webots\msys64\mingw64\bin\webotsw.exe",
+    "C:\Program Files\Webots\msys64\mingw64\bin\webots.exe"
 )
 
 $resolvedWebots = $null
