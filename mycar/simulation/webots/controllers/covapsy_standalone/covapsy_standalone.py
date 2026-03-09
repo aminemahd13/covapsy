@@ -44,6 +44,10 @@ except Exception:
     WEBOTS_AVAILABLE = False
 
 
+# AI speed state (shared across calls for ramp smoothing)
+_ai_prev_speed = 0.0
+
+
 def clamp(value, lower, upper):
     return max(lower, min(upper, value))
 
@@ -666,6 +670,7 @@ def blend_lidar_and_camera_steering(lidar_steering_rad, camera_state):
 
 
 def advanced_gap_follower(ranges, speed_cap_m_s):
+    global _ai_prev_speed
     _front_indices, front_ranges, front_angles = front_sector(ranges)
     if not front_ranges:
         return 0.0, 0.0
@@ -761,13 +766,19 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
         sectors = extract_sector_ranges(ranges)
         curvature = estimate_curvature(sectors)
         speed_m_s = compute_optimal_speed(
-            curvature=curvature,
-            front_clearance=projected_clearance,
-            steering_rad=steering_rad,
             max_speed=cap,
             min_speed=adaptive_floor,
+            steering_rad=steering_rad,
             max_steering=MAX_STEERING_RAD,
+            projected_clearance=projected_clearance,
+            passage_width=projected_clearance * 2.0,
+            curvature=curvature,
+            prev_speed=_ai_prev_speed,
+            sector_ranges=sectors,
+            ttc_clearance=projected_ttc_clearance,
+            ttc_target_sec=SPEED_TARGET_TTC_SEC,
         )
+        _ai_prev_speed = speed_m_s
     else:
         speed_m_s = adaptive_floor + (cap - adaptive_floor) * steering_factor * clearance_factor
         speed_m_s = clamp(speed_m_s, adaptive_floor, cap)
