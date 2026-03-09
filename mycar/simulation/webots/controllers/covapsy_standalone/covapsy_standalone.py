@@ -11,12 +11,14 @@ Keyboard controls:
 import math
 
 try:
-    from controller import Lidar
+    from controller import Camera, Lidar, RangeFinder
     from vehicle import Driver
 
     WEBOTS_AVAILABLE = True
 except Exception:
+    Camera = object
     Lidar = object
+    RangeFinder = object
     Driver = object
     WEBOTS_AVAILABLE = False
 
@@ -64,12 +66,61 @@ STEERING_RATE_LIMIT_RAD = math.radians(1.25)
 STEERING_LOW_PASS_ALPHA = 0.55
 REVERSE_STEERING_MAX_RAD = math.radians(10.0)
 
+# Camera guidance knobs (color + depth)
+RGB_CAMERA_CANDIDATES = ("RealSenseRGB", "RGB_camera", "camera")
+DEPTH_CAMERA_CANDIDATES = ("RealSenseDepth", "Depth_camera", "range-finder")
+EXPECTED_RED_ON_LEFT = True
+CAMERA_ROI_START_FRAC = 0.58
+CAMERA_SAMPLE_STRIDE_X = 3
+CAMERA_SAMPLE_STRIDE_Y = 3
+CAMERA_MIN_BRIGHTNESS = 36
+CAMERA_MIN_SATURATION = 0.22
+CAMERA_RED_DOMINANCE = 1.30
+CAMERA_GREEN_DOMINANCE = 1.25
+CAMERA_MIN_COLOR_PIXELS = 80
+CAMERA_CONFIDENCE_PIXELS = 850
+CAMERA_BLEND_MIN = 0.18
+CAMERA_BLEND_MAX = 0.42
+CAMERA_LANE_GAIN_RAD = math.radians(10.0)
+CAMERA_SINGLE_BORDER_STEER_RAD = math.radians(6.0)
+CAMERA_DEPTH_GAIN_RAD = math.radians(4.0)
+CAMERA_DEPTH_BALANCE_RANGE_M = 0.40
+CAMERA_DEPTH_MIN_VALID_M = 0.12
+CAMERA_DEPTH_MAX_VALID_M = 6.0
+CAMERA_ORDER_MIN_SEPARATION_PX = 24
+CAMERA_WRONG_ORDER_SPEED_CAP_M_S = 0.45
+CAMERA_WRONG_ORDER_CONFIDENCE = 0.60
+
 
 def set_drive_command(driver, steering_rad, speed_m_s):
     steering_rad = clamp(steering_rad, -MAX_STEERING_RAD, MAX_STEERING_RAD)
     # Webots steering sign is inverted versus controller geometry.
     driver.setSteeringAngle(-steering_rad)
     driver.setCruisingSpeed(speed_m_s * 3.6)
+
+
+def try_enable_optional_sensor(driver, candidate_names, sensor_time_step):
+    for device_name in candidate_names:
+        try:
+            device = driver.getDevice(device_name)
+        except Exception:
+            continue
+        if device is None:
+            continue
+        try:
+            device.enable(sensor_time_step)
+            return device, device_name
+        except Exception:
+            continue
+    return None, None
+
+
+def valid_depth_value(depth_value):
+    return (
+        depth_value is not None
+        and math.isfinite(depth_value)
+        and CAMERA_DEPTH_MIN_VALID_M <= depth_value <= CAMERA_DEPTH_MAX_VALID_M
+    )
 
 
 def angle_of_index(idx):
@@ -171,6 +222,203 @@ def adaptive_min_speed(nearest_dist, steering_rad):
     turn_factor = 1.0 - 0.6 * clamp(abs(steering_rad) / MAX_STEERING_RAD, 0.0, 1.0)
     min_speed = MIN_SPEED_FLOOR_M_S + (BASE_MIN_SPEED_M_S - MIN_SPEED_FLOOR_M_S) * distance_factor * turn_factor
     return clamp(min_speed, MIN_SPEED_FLOOR_M_S, BASE_MIN_SPEED_M_S)
+
+
+def extract_camera_guidance(rgb_camera, depth_camera):
+    if rgb_camera is None:
+        return {
+            "steering_rad": 0.0,
+            "confidence": 0.0,
+            "wrong_order": False,
+            "order_confidence": 0.0,
+        }
+
+    image = rgb_camera.getImage()
+    width = int(rgb_camera.getWidth())
+    height = int(rgb_camera.getHeight())
+    if image is None or width <= 0 or height <= 0:
+        return {
+            "steering_rad": 0.0,
+            "confidence": 0.0,
+            "wrong_order": False,
+            "order_confidence": 0.0,
+        }
+
+    depth_image = None
+    depth_w = 0
+    depth_h = 0
+    if depth_camera is not None:
+        try:
+            depth_image = depth_camera.getRangeImage()
+            depth_w = int(depth_camera.getWidth())
+            depth_h = int(depth_camera.getHeight())
+            if depth_image is not None and len(depth_image) < (depth_w * depth_h):
+                depth_image = None
+        except Exception:
+            depth_image = None
+
+    roi_y0 = int(height * CAMERA_ROI_START_FRAC)
+    center_x = 0.5 * width
+
+    red_count = 0
+    green_count = 0
+    red_sum_x = 0.0
+    green_sum_x = 0.0
+
+    red_left = 0
+    red_right = 0
+    green_left = 0
+    green_right = 0
+
+    nearest_left = MAX_LIDAR_RANGE_M
+    nearest_right = MAX_LIDAR_RANGE_M
+
+    for y in range(roi_y0, height, CAMERA_SAMPLE_STRIDE_Y):
+        for x in range(0, width, CAMERA_SAMPLE_STRIDE_X):
+            red = Camera.imageGetRed(image, width, x, y)
+            green = Camera.imageGetGreen(image, width, x, y)
+            blue = Camera.imageGetBlue(image, width, x, y)
+
+            cmax = max(red, green, blue)
+            if cmax < CAMERA_MIN_BRIGHTNESS:
+                continue
+            cmin = min(red, green, blue)
+            saturation = (cmax - cmin) / float(max(cmax, 1))
+            if saturation < CAMERA_MIN_SATURATION:
+                continue
+
+            is_red = (
+                red > CAMERA_RED_DOMINANCE * green
+                and red > CAMERA_RED_DOMINANCE * blue
+            )
+            is_green = (
+                green > CAMERA_GREEN_DOMINANCE * red
+                and green > CAMERA_GREEN_DOMINANCE * blue
+            )
+            if not is_red and not is_green:
+                continue
+
+            on_left_half = x < center_x
+            if is_red:
+                red_count += 1
+                red_sum_x += x
+                if on_left_half:
+                    red_left += 1
+                else:
+                    red_right += 1
+            elif is_green:
+                green_count += 1
+                green_sum_x += x
+                if on_left_half:
+                    green_left += 1
+                else:
+                    green_right += 1
+
+            if depth_image is not None and depth_w > 0 and depth_h > 0:
+                depth_x = clamp(int(x * depth_w / width), 0, depth_w - 1)
+                depth_y = clamp(int(y * depth_h / height), 0, depth_h - 1)
+                depth_idx = depth_y * depth_w + depth_x
+                depth_value = float(depth_image[depth_idx])
+                if valid_depth_value(depth_value):
+                    if on_left_half:
+                        nearest_left = min(nearest_left, depth_value)
+                    else:
+                        nearest_right = min(nearest_right, depth_value)
+
+    steer_lane = 0.0
+    red_cx = None
+    green_cx = None
+    if red_count >= CAMERA_MIN_COLOR_PIXELS:
+        red_cx = red_sum_x / red_count
+    if green_count >= CAMERA_MIN_COLOR_PIXELS:
+        green_cx = green_sum_x / green_count
+
+    if red_cx is not None and green_cx is not None:
+        lane_center = 0.5 * (red_cx + green_cx)
+        lateral_error = (lane_center - center_x) / max(center_x, 1.0)
+        # Positive steering in this controller means turning left.
+        steer_lane = -CAMERA_LANE_GAIN_RAD * lateral_error
+    elif green_cx is not None:
+        # Seeing only right border (green): bias to the left.
+        steer_lane = CAMERA_SINGLE_BORDER_STEER_RAD
+    elif red_cx is not None:
+        # Seeing only left border (red): bias to the right.
+        steer_lane = -CAMERA_SINGLE_BORDER_STEER_RAD
+
+    steer_depth = 0.0
+    left_valid = nearest_left < MAX_LIDAR_RANGE_M
+    right_valid = nearest_right < MAX_LIDAR_RANGE_M
+    if left_valid and right_valid:
+        side_imbalance = clamp(
+            (nearest_right - nearest_left) / CAMERA_DEPTH_BALANCE_RANGE_M,
+            -1.0,
+            1.0,
+        )
+        # If left side is too close, steer right.
+        steer_depth = -CAMERA_DEPTH_GAIN_RAD * side_imbalance
+    elif left_valid:
+        steer_depth = -0.7 * CAMERA_DEPTH_GAIN_RAD
+    elif right_valid:
+        steer_depth = 0.7 * CAMERA_DEPTH_GAIN_RAD
+
+    steering_rad = clamp(steer_lane + steer_depth, -MAX_STEERING_RAD, MAX_STEERING_RAD)
+
+    total_colored = red_count + green_count
+    confidence = clamp(total_colored / CAMERA_CONFIDENCE_PIXELS, 0.0, 1.0)
+    if red_cx is not None and green_cx is not None:
+        confidence = clamp(confidence + 0.25, 0.0, 1.0)
+
+    wrong_order = False
+    order_confidence = 0.0
+    side_total = red_left + red_right + green_left + green_right
+    if side_total > 0:
+        expected_side_ratio = (red_left + green_right) / float(side_total)
+        side_order_strength = abs((2.0 * expected_side_ratio) - 1.0)
+        order_confidence = max(order_confidence, side_order_strength)
+        if side_order_strength > 0.20:
+            if EXPECTED_RED_ON_LEFT:
+                wrong_order = expected_side_ratio < 0.5
+            else:
+                wrong_order = expected_side_ratio > 0.5
+    if red_cx is not None and green_cx is not None:
+        separation = abs(green_cx - red_cx)
+        order_confidence = max(
+            order_confidence,
+            clamp(separation / max(width * 0.5, 1.0), 0.0, 1.0),
+        )
+        if separation >= CAMERA_ORDER_MIN_SEPARATION_PX:
+            red_left_of_green = red_cx < green_cx
+            wrong_order = red_left_of_green != EXPECTED_RED_ON_LEFT
+
+    return {
+        "steering_rad": steering_rad,
+        "confidence": confidence,
+        "wrong_order": wrong_order,
+        "order_confidence": order_confidence,
+    }
+
+
+def blend_lidar_and_camera_steering(lidar_steering_rad, camera_state):
+    confidence = clamp(camera_state.get("confidence", 0.0), 0.0, 1.0)
+    if confidence <= 0.0:
+        return clamp(lidar_steering_rad, -MAX_STEERING_RAD, MAX_STEERING_RAD)
+
+    camera_steering = clamp(
+        camera_state.get("steering_rad", 0.0),
+        -MAX_STEERING_RAD,
+        MAX_STEERING_RAD,
+    )
+    blend = CAMERA_BLEND_MIN + (CAMERA_BLEND_MAX - CAMERA_BLEND_MIN) * confidence
+    fused = (1.0 - blend) * lidar_steering_rad + blend * camera_steering
+
+    if (
+        camera_state.get("wrong_order", False)
+        and camera_state.get("order_confidence", 0.0) > CAMERA_WRONG_ORDER_CONFIDENCE
+    ):
+        # When color order says direction is likely wrong, trust camera guidance more.
+        fused = 0.35 * lidar_steering_rad + 0.65 * camera_steering
+
+    return clamp(fused, -MAX_STEERING_RAD, MAX_STEERING_RAD)
 
 
 def advanced_gap_follower(ranges, speed_cap_m_s):
@@ -304,6 +552,16 @@ def run_controller():
     lidar = Lidar("RpLidarA2")
     lidar.enable(sensor_time_step)
     lidar.enablePointCloud()
+    rgb_camera, rgb_camera_name = try_enable_optional_sensor(
+        driver,
+        RGB_CAMERA_CANDIDATES,
+        sensor_time_step,
+    )
+    depth_camera, depth_camera_name = try_enable_optional_sensor(
+        driver,
+        DEPTH_CAMERA_CANDIDATES,
+        sensor_time_step,
+    )
 
     keyboard = driver.getKeyboard()
     keyboard.enable(sensor_time_step)
@@ -323,6 +581,14 @@ def run_controller():
     print("No ROS required. Click the 3D window then use:")
     print("  A=start  N=stop  S=algo toggle  R=reverse  +/- speed cap")
     print(f"Active speed profile: {DEFAULT_RACE_PROFILE} (cap={speed_cap:.2f} m/s)")
+    if rgb_camera is not None:
+        print(f"Camera guidance: RGB sensor enabled ({rgb_camera_name})")
+    else:
+        print("Camera guidance: RGB sensor not found, LiDAR-only mode")
+    if depth_camera is not None:
+        print(f"Camera guidance: depth sensor enabled ({depth_camera_name})")
+    else:
+        print("Camera guidance: depth sensor not found")
     print("=" * 64)
 
     set_drive_command(driver, 0.0, 0.0)
@@ -397,6 +663,14 @@ def run_controller():
             steering, target_speed = advanced_gap_follower(ranges, speed_cap)
         else:
             steering, target_speed = simple_baseline(ranges, speed_cap)
+
+        camera_state = extract_camera_guidance(rgb_camera, depth_camera)
+        steering = blend_lidar_and_camera_steering(steering, camera_state)
+        if (
+            camera_state["wrong_order"]
+            and camera_state["order_confidence"] > CAMERA_WRONG_ORDER_CONFIDENCE
+        ):
+            target_speed = min(target_speed, CAMERA_WRONG_ORDER_SPEED_CAP_M_S)
 
         steering = stabilize_steering_command(steering, prev_steering)
         prev_steering = steering

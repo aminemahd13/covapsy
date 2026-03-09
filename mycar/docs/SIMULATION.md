@@ -25,6 +25,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1 -We
 - World: `simulation/webots/worlds/Piste_CoVAPSy_2025a_standalone.wbt`
 - Controller: `simulation/webots/controllers/covapsy_standalone/covapsy_standalone.py`
 - Robot name: `TT02_standalone`
+- Sensors used by standalone controller:
+  - LiDAR (`RpLidarA2`) for reactive gap following.
+  - Simulated RealSense RGB-D (`RealSenseRGB`, `RealSenseDepth`) for red/green wall guidance and direction sanity.
 
 ### Keyboard controls
 - `A`: start autonomous mode

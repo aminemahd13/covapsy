@@ -199,6 +199,26 @@ PROTO TT02_2025a [
           ]
         }
       }
+      Camera {
+        translation 0.195 0 0.083
+        rotation 0 1 0 0.18
+        name "RealSenseRGB"
+        width 320
+        height 180
+        fieldOfView 1.2
+        near 0.05
+      }
+      RangeFinder {
+        translation 0.195 0 0.083
+        rotation 0 1 0 0.18
+        name "RealSenseDepth"
+        width 160
+        height 90
+        fieldOfView 1.2
+        near 0.05
+        minRange 0.10
+        maxRange 6.0
+      }
       Transform {
         translation 0.127 0 -0.02
         rotation 0 0 1 0
