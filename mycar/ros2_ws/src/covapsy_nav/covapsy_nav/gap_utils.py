@@ -24,12 +24,19 @@ if TYPE_CHECKING:
 
 _NEAREST_HEADING_PENALTY = 0.30
 _ANGLE_PENALTY_PER_RAD = 0.14
-_GAP_SCORE_WIDTH_WEIGHT = 0.40
-_GAP_SCORE_CLEARANCE_WEIGHT = 0.40
-_GAP_SCORE_HEADING_WEIGHT = 0.20
+_GAP_SCORE_WIDTH_WEIGHT = 0.35
+_GAP_SCORE_CLEARANCE_WEIGHT = 0.35
+_GAP_SCORE_HEADING_WEIGHT = 0.30
 _GAP_EDGE_PENALTY = 0.14
-_SPEED_LOOKAHEAD_WINDOW_DEG = 16.0
-_SPEED_TTC_WINDOW_DEG = 8.0
+_SPEED_LOOKAHEAD_WINDOW_DEG = 20.0
+_SPEED_TTC_WINDOW_DEG = 12.0
+
+# Forward-direction safety: prevent wall collisions
+_EMERGENCY_WALL_DIST_M = 0.30
+_FORWARD_TTC_MIN_SEC = 0.40
+_SLEW_URGENCY_DIST_M = 0.55
+_SLEW_URGENCY_BOOST = 2.5
+_GAP_REACH_MULTIPLIER = 2.8
 
 # Module-level state for curvature smoothing across calls
 _prev_curvature: float = 0.0
@@ -107,7 +114,7 @@ def compute_gap_command(
     steering_gain: float,
     fov_degrees: float = 200.0,
     prev_steering: float = 0.0,
-    steering_slew_rate: float = 0.07,
+    steering_slew_rate: float = 0.15,
     max_steering: float = 0.5,
     ttc_target_sec: float = 1.2,
     use_ai_speed: bool = True,
@@ -183,6 +190,13 @@ def compute_gap_command(
                 for j in range(lo, hi):
                     f_ranges[j] = min(f_ranges[j], cr)
 
+    # Mask unreachable gaps (too far off-axis for the car to steer to)
+    gap_reach_limit = max_steering * _GAP_REACH_MULTIPLIER
+    if gap_reach_limit < fov * 0.5:
+        for i in range(fn):
+            if abs(f_angles[i]) > gap_reach_limit:
+                f_ranges[i] = 0.0
+
     # --- AI: adaptive safety radius based on passage width ---
     passage_width = compute_passage_width(
         list(reference_ranges), list(f_angles),
@@ -229,11 +243,26 @@ def compute_gap_command(
     if use_ai_speed:
         effective_gain = adaptive_steering_gain(_prev_curvature, steering_gain)
 
+    # Forward clearance: where the car is actually heading (for adaptive steering + emergency brake)
+    actual_forward_clearance = _forward_clearance_for_heading(
+        f_ranges=reference_ranges,
+        f_angles=f_angles,
+        heading_rad=0.0,
+        half_window_deg=_SPEED_LOOKAHEAD_WINDOW_DEG,
+        fallback=nearest_dist,
+    )
+
+    # Adaptive slew rate: faster steering when wall is close ahead
+    effective_slew = steering_slew_rate
+    if actual_forward_clearance < _SLEW_URGENCY_DIST_M:
+        urgency = 1.0 - actual_forward_clearance / _SLEW_URGENCY_DIST_M
+        effective_slew = steering_slew_rate * (1.0 + _SLEW_URGENCY_BOOST * urgency)
+
     raw_steering = effective_gain * target_angle
     raw_steering = max(-max_steering, min(max_steering, raw_steering))
     steering = max(
-        float(prev_steering) - float(steering_slew_rate),
-        min(float(prev_steering) + float(steering_slew_rate), raw_steering),
+        float(prev_steering) - float(effective_slew),
+        min(float(prev_steering) + float(effective_slew), raw_steering),
     )
 
     projected_clearance = _forward_clearance_for_heading(
@@ -309,6 +338,14 @@ def compute_gap_command(
         else:
             speed = max(0.0, speed)
         speed = min(max_speed, speed)
+
+    # Forward-direction safety: TTC guard and emergency wall brake
+    if speed > 0.05 and actual_forward_clearance < 2.0:
+        fwd_ttc = actual_forward_clearance / speed
+        if fwd_ttc < _FORWARD_TTC_MIN_SEC:
+            speed = min(speed, max(min_speed * 0.3, actual_forward_clearance / _FORWARD_TTC_MIN_SEC))
+    if actual_forward_clearance < _EMERGENCY_WALL_DIST_M:
+        speed = min(speed, min_speed)
 
     _prev_speed = speed
     return float(speed), float(steering)

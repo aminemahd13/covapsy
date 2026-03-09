@@ -104,7 +104,7 @@ CAR_WIDTH_M = 0.30
 MAX_LIDAR_RANGE_M = 5.0
 MIN_VALID_RANGE_M = 0.05
 FRONT_FOV_DEG = 150
-GAP_SELECTION_FOV_DEG = 120
+GAP_SELECTION_FOV_DEG = 90
 
 # Controller tuning
 DISPARITY_THRESHOLD_M = 0.38
@@ -139,12 +139,18 @@ STEERING_RATE_LIMIT_RAD = math.radians(7.5)
 STEERING_LOW_PASS_ALPHA = 0.88
 REVERSE_STEERING_MAX_RAD = math.radians(13.0)
 GAP_SCORE_WIDTH_WEIGHT = 0.35
-GAP_SCORE_CLEARANCE_WEIGHT = 0.40
-GAP_SCORE_HEADING_WEIGHT = 0.25
+GAP_SCORE_CLEARANCE_WEIGHT = 0.35
+GAP_SCORE_HEADING_WEIGHT = 0.30
 GAP_EDGE_PENALTY = 0.14
-SPEED_LOOKAHEAD_WINDOW_DEG = 16
-SPEED_TTC_WINDOW_DEG = 8
+SPEED_LOOKAHEAD_WINDOW_DEG = 20
+SPEED_TTC_WINDOW_DEG = 12
 SPEED_TARGET_TTC_SEC = 0.80
+
+# Forward-direction safety
+EMERGENCY_WALL_DIST_M = 0.30
+FORWARD_TTC_MIN_SEC = 0.40
+SLEW_URGENCY_DIST_M = 0.55
+SLEW_URGENCY_BOOST = 2.5
 
 # Cornering and anti-stall knobs
 CORNER_TRIGGER_DIST_M = 0.70
@@ -846,8 +852,18 @@ def advanced_gap_follower(ranges, speed_cap_m_s, vehicle_state=None):
                 ttc_clearance=projected_ttc_clearance,
                 ttc_target_sec=SPEED_TARGET_TTC_SEC,
             )
+        # Forward-direction safety guard
+        actual_fwd = forward_clearance_for_heading(
+            reference_ranges, front_angles, 0.0, SPEED_LOOKAHEAD_WINDOW_DEG,
+        )
+        if speed_m_s > 0.05 and actual_fwd < 2.0:
+            fwd_ttc = actual_fwd / speed_m_s
+            if fwd_ttc < FORWARD_TTC_MIN_SEC:
+                speed_m_s = min(speed_m_s, max(adaptive_floor * 0.3, actual_fwd / FORWARD_TTC_MIN_SEC))
+        if actual_fwd < EMERGENCY_WALL_DIST_M:
+            speed_m_s = min(speed_m_s, adaptive_floor)
+
         _ai_prev_speed = speed_m_s
-        # AI path already applied its own TTC guard — skip redundant outer guard
         return steering_rad, speed_m_s
 
     # Classic fallback
@@ -855,6 +871,18 @@ def advanced_gap_follower(ranges, speed_cap_m_s, vehicle_state=None):
     speed_m_s = clamp(speed_m_s, adaptive_floor, cap)
     ttc_speed_cap = projected_ttc_clearance / max(SPEED_TARGET_TTC_SEC, 0.1)
     speed_m_s = min(speed_m_s, max(0.0, ttc_speed_cap))
+
+    # Forward-direction safety guard
+    actual_fwd = forward_clearance_for_heading(
+        reference_ranges, front_angles, 0.0, SPEED_LOOKAHEAD_WINDOW_DEG,
+    )
+    if speed_m_s > 0.05 and actual_fwd < 2.0:
+        fwd_ttc = actual_fwd / speed_m_s
+        if fwd_ttc < FORWARD_TTC_MIN_SEC:
+            speed_m_s = min(speed_m_s, max(adaptive_floor * 0.3, actual_fwd / FORWARD_TTC_MIN_SEC))
+    if actual_fwd < EMERGENCY_WALL_DIST_M:
+        speed_m_s = min(speed_m_s, adaptive_floor)
+
     return steering_rad, speed_m_s
 
 
@@ -933,10 +961,17 @@ def compute_reverse_steering(ranges):
     return clamp(steering_rad, -MAX_STEERING_RAD, MAX_STEERING_RAD)
 
 
-def stabilize_steering_command(target_steering_rad, prev_steering_rad):
+def stabilize_steering_command(target_steering_rad, prev_steering_rad, forward_clearance=999.0):
     target_steering_rad = clamp(target_steering_rad, -MAX_STEERING_RAD, MAX_STEERING_RAD)
     delta = target_steering_rad - prev_steering_rad
-    limited_delta = clamp(delta, -STEERING_RATE_LIMIT_RAD, STEERING_RATE_LIMIT_RAD)
+
+    # Adaptive rate limit: faster when wall is close ahead
+    effective_rate = STEERING_RATE_LIMIT_RAD
+    if forward_clearance < SLEW_URGENCY_DIST_M:
+        urgency = 1.0 - forward_clearance / SLEW_URGENCY_DIST_M
+        effective_rate = STEERING_RATE_LIMIT_RAD * (1.0 + SLEW_URGENCY_BOOST * urgency)
+
+    limited_delta = clamp(delta, -effective_rate, effective_rate)
     rate_limited = prev_steering_rad + limited_delta
 
     smoothed = (
@@ -1267,15 +1302,18 @@ def run_controller():
         else:
             wrong_order_counter = max(0, wrong_order_counter - 2)
 
-        steering = stabilize_steering_command(steering, prev_steering)
+        front_dist = front_clearance(ranges)
+        steering = stabilize_steering_command(steering, prev_steering, front_dist)
         prev_steering = steering
 
         if target_speed > smoothed_speed:
             smoothed_speed = min(target_speed, smoothed_speed + SPEED_RAMP_UP_M_S)
         else:
-            smoothed_speed = max(target_speed, smoothed_speed - SPEED_RAMP_DOWN_M_S)
+            decel_rate = SPEED_RAMP_DOWN_M_S
+            if front_dist < 0.40:
+                decel_rate = SPEED_RAMP_DOWN_M_S * 3.0
+            smoothed_speed = max(target_speed, smoothed_speed - decel_rate)
 
-        front_dist = front_clearance(ranges)
         actual_speed = read_vehicle_speed_m_s(driver)
         speed_log_value = actual_speed if actual_speed is not None else -1.0
 

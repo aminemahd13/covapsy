@@ -63,3 +63,42 @@ def test_gap_command_prefers_clearer_gap_direction():
 
     best = _choose_best_gap(f_ranges=f_ranges, f_angles=f_angles, gaps=gaps, max_range=5.0)
     assert best == (7, 11)
+
+
+# ---- Forward-direction safety tests ----
+
+
+def test_wall_ahead_limits_speed():
+    """When a wall is directly ahead, speed must drop even if side gaps exist."""
+    ranges = np.full(360, 4.0, dtype=np.float32)
+    # Wall directly ahead: angle_min=-π, increment=2π/360, so front = index 180
+    for i in range(170, 191):
+        ranges[i] = 0.22  # very close wall ahead
+
+    speed, steering = compute_gap_command(ranges_in=ranges, **_default_kwargs())
+    # Speed should be severely limited due to forward wall (emergency brake threshold 0.30m)
+    assert speed <= 0.6
+
+
+def test_open_track_no_forward_penalty():
+    """On wide-open track, forward safety should not reduce speed."""
+    ranges = np.full(360, 4.5, dtype=np.float32)
+    speed, steering = compute_gap_command(ranges_in=ranges, **_default_kwargs())
+    # Forward safety must not drag speed to a crawl on open track
+    assert speed >= 0.5
+
+
+def test_adaptive_slew_rate_near_wall():
+    """With wall close ahead, steering can change more than base slew rate."""
+    ranges = np.full(360, 4.0, dtype=np.float32)
+    # Wall ahead: indices 170-190 (front ±10°)
+    for i in range(170, 191):
+        ranges[i] = 0.28
+
+    base_slew = 0.04
+    _, steer = compute_gap_command(
+        ranges_in=ranges, prev_steering=0.0, steering_slew_rate=base_slew, **_default_kwargs(),
+    )
+    # Forward clearance 0.28m < urgency threshold 0.55m → adaptive boost kicks in
+    # Effective slew > base → steering can exceed base_slew from prev_steering=0
+    assert abs(steer) > base_slew + 0.001
