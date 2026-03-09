@@ -37,18 +37,18 @@ def env_flag(name, default=False):
 
 
 # Car / sensor constants
-MAX_STEERING_DEG = 16.0
+MAX_STEERING_DEG = 18.5
 MAX_STEERING_RAD = math.radians(MAX_STEERING_DEG)
 CAR_WIDTH_M = 0.30
 MAX_LIDAR_RANGE_M = 5.0
 MIN_VALID_RANGE_M = 0.05
-FRONT_FOV_DEG = 100
+FRONT_FOV_DEG = 115
 
 # Controller tuning
-DISPARITY_THRESHOLD_M = 0.30
-SAFETY_RADIUS_M = 0.22
-MIN_SPEED_FLOOR_M_S = 0.10
-BASE_MIN_SPEED_M_S = 0.24
+DISPARITY_THRESHOLD_M = 0.28
+SAFETY_RADIUS_M = 0.20
+MIN_SPEED_FLOOR_M_S = 0.16
+BASE_MIN_SPEED_M_S = 0.32
 RACE_PROFILE_SPEED_CAPS = {
     "HOMOLOGATION": 0.8,
     "RACE_STABLE": 2.5,
@@ -60,20 +60,31 @@ MAX_SPEED_LIMIT_M_S = RACE_PROFILE_SPEED_CAPS["RACE_AGGRESSIVE"]
 SPEED_RAMP_UP_M_S = 0.030
 SPEED_RAMP_DOWN_M_S = 0.10
 REVERSE_SPEED_M_S = -0.55
-REVERSE_STEPS = 24
-EMERGENCY_STUCK_STEPS = 8
+REVERSE_STEPS = 28
+EMERGENCY_STUCK_STEPS = 6
 EMERGENCY_FRONT_WINDOW_DEG = 12
-EMERGENCY_BLOCK_DISTANCE_M = 0.14
+EMERGENCY_BLOCK_DISTANCE_M = 0.17
 
 # Stability knobs
-ANGLE_PENALTY_PER_RAD = 0.35
+ANGLE_PENALTY_PER_RAD = 0.22
 WRONG_SIDE_DAMPING = 0.35
 CLEARANCE_DIFF_THRESHOLD_M = 0.18
 SIDE_CLEAR_MIN_DEG = 22
 SIDE_CLEAR_MAX_DEG = 85
-STEERING_RATE_LIMIT_RAD = math.radians(1.25)
-STEERING_LOW_PASS_ALPHA = 0.55
-REVERSE_STEERING_MAX_RAD = math.radians(10.0)
+STEERING_RATE_LIMIT_RAD = math.radians(2.2)
+STEERING_LOW_PASS_ALPHA = 0.72
+REVERSE_STEERING_MAX_RAD = math.radians(13.0)
+
+# Cornering and anti-stall knobs
+CORNER_TRIGGER_DIST_M = 0.65
+CORNER_BIAS_MAX_RAD = math.radians(7.0)
+CORNER_CLEARANCE_REF_M = 0.9
+NO_PROGRESS_SPEED_CMD_M_S = 0.28
+NO_PROGRESS_SPEED_ACTUAL_M_S = 0.05
+NO_PROGRESS_FRONT_DIST_M = 0.50
+NO_PROGRESS_TRIGGER_STEPS = 20
+EARLY_STALL_WINDOW_DIST_M = 0.30
+EARLY_STALL_TRIGGER_STEPS = 14
 
 # Camera guidance knobs (color + depth)
 RGB_CAMERA_CANDIDATES = ("RealSenseRGB", "RGB_camera", "camera")
@@ -89,16 +100,16 @@ CAMERA_GREEN_DOMINANCE = 1.25
 CAMERA_MIN_COLOR_PIXELS = 80
 CAMERA_CONFIDENCE_PIXELS = 850
 CAMERA_BLEND_MIN = 0.18
-CAMERA_BLEND_MAX = 0.42
-CAMERA_LANE_GAIN_RAD = math.radians(10.0)
-CAMERA_SINGLE_BORDER_STEER_RAD = math.radians(6.0)
-CAMERA_DEPTH_GAIN_RAD = math.radians(4.0)
+CAMERA_BLEND_MAX = 0.55
+CAMERA_LANE_GAIN_RAD = math.radians(12.0)
+CAMERA_SINGLE_BORDER_STEER_RAD = math.radians(8.0)
+CAMERA_DEPTH_GAIN_RAD = math.radians(5.5)
 CAMERA_DEPTH_BALANCE_RANGE_M = 0.40
 CAMERA_DEPTH_MIN_VALID_M = 0.12
 CAMERA_DEPTH_MAX_VALID_M = 6.0
 CAMERA_ORDER_MIN_SEPARATION_PX = 24
-CAMERA_WRONG_ORDER_SPEED_CAP_M_S = 0.45
-CAMERA_WRONG_ORDER_CONFIDENCE = 0.60
+CAMERA_WRONG_ORDER_SPEED_CAP_M_S = 0.70
+CAMERA_WRONG_ORDER_CONFIDENCE = 0.72
 
 # Runtime logging controls
 STANDALONE_LOG_EVERY_STEPS = 8
@@ -480,15 +491,19 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
         key=lambda idx: front_ranges[idx] - ANGLE_PENALTY_PER_RAD * abs(front_angles[idx]),
     )
     target_angle = front_angles[best_local]
+    corner_bias = compute_corner_bias(reference_ranges, front_angles, nearest_dist)
 
     # 5) Steering + speed adaptation
-    steering_rad = clamp(target_angle, -MAX_STEERING_RAD, MAX_STEERING_RAD)
+    steering_rad = clamp(target_angle + corner_bias, -MAX_STEERING_RAD, MAX_STEERING_RAD)
     steering_rad = apply_turn_direction_sanity(steering_rad, reference_ranges, front_angles)
 
-    steering_factor = 1.0 - 0.80 * abs(steering_rad) / MAX_STEERING_RAD
-    clearance_factor = clamp((nearest_dist - 0.12) / 1.6, 0.0, 1.0)
+    turn_ratio = clamp(abs(steering_rad) / MAX_STEERING_RAD, 0.0, 1.0)
+    steering_factor = 1.0 - 0.88 * turn_ratio
+    clearance_factor = clamp((nearest_dist - 0.10) / 1.2, 0.0, 1.0)
 
     adaptive_floor = adaptive_min_speed(nearest_dist, steering_rad)
+    if nearest_dist < 0.45 and turn_ratio > 0.55:
+        adaptive_floor = max(adaptive_floor, 0.22)
     cap = max(adaptive_floor, speed_cap_m_s)
     speed_m_s = adaptive_floor + (cap - adaptive_floor) * steering_factor * clearance_factor
     speed_m_s = clamp(speed_m_s, adaptive_floor, cap)
@@ -523,6 +538,28 @@ def nearest_front_obstacle(ranges, half_window_deg=45):
 
 def front_clearance(ranges, half_window_deg=12):
     return min(ranges[deg % 360] for deg in range(-half_window_deg, half_window_deg + 1))
+
+
+def read_vehicle_speed_m_s(driver):
+    # Driver API exposes km/h; convert to m/s when available.
+    getter = getattr(driver, "getCurrentSpeed", None)
+    if getter is None:
+        return None
+    try:
+        return max(0.0, float(getter()) / 3.6)
+    except Exception:
+        return None
+
+
+def compute_corner_bias(front_ranges, front_angles, nearest_dist):
+    if nearest_dist >= CORNER_TRIGGER_DIST_M:
+        return 0.0
+
+    left_clear, right_clear = side_clearances(front_ranges, front_angles)
+    clearance_delta = left_clear - right_clear
+    direction = clamp(clearance_delta / CORNER_CLEARANCE_REF_M, -1.0, 1.0)
+    severity = clamp((CORNER_TRIGGER_DIST_M - nearest_dist) / CORNER_TRIGGER_DIST_M, 0.0, 1.0)
+    return CORNER_BIAS_MAX_RAD * severity * direction
 
 
 def compute_reverse_steering(ranges):
@@ -588,6 +625,8 @@ def run_controller():
     reverse_ticks = 0
     reverse_steering = 0.0
     stuck_counter = 0
+    no_progress_counter = 0
+    low_speed_stall_counter = 0
     speed_cap = DEFAULT_MAX_SPEED_M_S
     smoothed_speed = 0.0
     prev_steering = 0.0
@@ -626,6 +665,8 @@ def run_controller():
                 reverse_ticks = 0
                 reverse_steering = 0.0
                 stuck_counter = 0
+                no_progress_counter = 0
+                low_speed_stall_counter = 0
                 smoothed_speed = 0.0
                 prev_steering = 0.0
                 print("[standalone] auto mode ON")
@@ -633,6 +674,8 @@ def run_controller():
                 auto_mode = False
                 reverse_ticks = 0
                 reverse_steering = 0.0
+                no_progress_counter = 0
+                low_speed_stall_counter = 0
                 smoothed_speed = 0.0
                 prev_steering = 0.0
                 set_drive_command(driver, 0.0, 0.0)
@@ -666,6 +709,8 @@ def run_controller():
 
         if reverse_ticks > 0:
             reverse_ticks -= 1
+            no_progress_counter = 0
+            low_speed_stall_counter = 0
             prev_steering = reverse_steering
             set_drive_command(driver, reverse_steering, REVERSE_SPEED_M_S)
             continue
@@ -676,6 +721,8 @@ def run_controller():
                 reverse_ticks = REVERSE_STEPS
                 reverse_steering = compute_reverse_steering(ranges)
                 stuck_counter = 0
+                no_progress_counter = 0
+                low_speed_stall_counter = 0
                 print(
                     "[standalone] emergency reverse (front blocked) "
                     f"steer={math.degrees(reverse_steering):.1f} deg"
@@ -706,10 +753,43 @@ def run_controller():
         else:
             smoothed_speed = max(target_speed, smoothed_speed - SPEED_RAMP_DOWN_M_S)
 
+        front_dist = front_clearance(ranges)
+        actual_speed = read_vehicle_speed_m_s(driver)
+        speed_log_value = actual_speed if actual_speed is not None else -1.0
+
+        if (
+            smoothed_speed > NO_PROGRESS_SPEED_CMD_M_S
+            and actual_speed is not None
+            and actual_speed < NO_PROGRESS_SPEED_ACTUAL_M_S
+            and front_dist < NO_PROGRESS_FRONT_DIST_M
+        ):
+            no_progress_counter += 1
+        else:
+            no_progress_counter = max(0, no_progress_counter - 1)
+
+        if target_speed <= (MIN_SPEED_FLOOR_M_S + 0.02) and front_dist < EARLY_STALL_WINDOW_DIST_M:
+            low_speed_stall_counter += 1
+        else:
+            low_speed_stall_counter = max(0, low_speed_stall_counter - 1)
+
+        if (
+            no_progress_counter >= NO_PROGRESS_TRIGGER_STEPS
+            or low_speed_stall_counter >= EARLY_STALL_TRIGGER_STEPS
+        ):
+            reverse_ticks = REVERSE_STEPS
+            reverse_steering = compute_reverse_steering(ranges)
+            no_progress_counter = 0
+            low_speed_stall_counter = 0
+            print(
+                "[standalone] stall recovery reverse "
+                f"(front={front_dist:.2f}m, speed={speed_log_value:.2f}m/s, "
+                f"steer={math.degrees(reverse_steering):.1f} deg)"
+            )
+            continue
+
         if logs_enabled:
             log_counter += 1
             if log_counter % STANDALONE_LOG_EVERY_STEPS == 0:
-                front_dist = front_clearance(ranges)
                 print(
                     "[standalone][log] "
                     f"mode={'ADV' if use_advanced else 'BASE'} "
@@ -717,6 +797,8 @@ def run_controller():
                     f"cap={speed_cap:.2f} "
                     f"steer={math.degrees(steering):+.1f}deg "
                     f"front={front_dist:.2f}m "
+                    f"v={speed_log_value:.2f}m/s "
+                    f"stall={no_progress_counter}/{low_speed_stall_counter} "
                     f"cam_conf={camera_state['confidence']:.2f} "
                     f"cam_wrong={int(camera_state['wrong_order'])} "
                     f"cam_order={camera_state['order_confidence']:.2f}"
