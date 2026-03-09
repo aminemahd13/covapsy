@@ -81,8 +81,8 @@ RACE_PROFILE_SPEED_CAPS = {
 DEFAULT_RACE_PROFILE = "RACE_AGGRESSIVE"
 DEFAULT_MAX_SPEED_M_S = RACE_PROFILE_SPEED_CAPS[DEFAULT_RACE_PROFILE]
 MAX_SPEED_LIMIT_M_S = RACE_PROFILE_SPEED_CAPS["RACE_AGGRESSIVE"]
-SPEED_RAMP_UP_M_S = 0.060
-SPEED_RAMP_DOWN_M_S = 0.10
+SPEED_RAMP_UP_M_S = 0.14
+SPEED_RAMP_DOWN_M_S = 0.12
 REVERSE_SPEED_M_S = -0.60
 REVERSE_STEPS = 28
 EMERGENCY_STUCK_STEPS = 6
@@ -92,13 +92,13 @@ EMERGENCY_MIN_BLOCK_HITS = 3
 LIDAR_MEDIAN_FILTER_RADIUS = 2
 
 # Stability knobs
-ANGLE_PENALTY_PER_RAD = 0.22
-WRONG_SIDE_DAMPING = 0.35
+ANGLE_PENALTY_PER_RAD = 0.18
+WRONG_SIDE_DAMPING = 0.30
 CLEARANCE_DIFF_THRESHOLD_M = 0.18
 SIDE_CLEAR_MIN_DEG = 22
 SIDE_CLEAR_MAX_DEG = 85
-STEERING_RATE_LIMIT_RAD = math.radians(3.5)
-STEERING_LOW_PASS_ALPHA = 0.80
+STEERING_RATE_LIMIT_RAD = math.radians(4.5)
+STEERING_LOW_PASS_ALPHA = 0.75
 REVERSE_STEERING_MAX_RAD = math.radians(13.0)
 GAP_SCORE_WIDTH_WEIGHT = 0.40
 GAP_SCORE_CLEARANCE_WEIGHT = 0.45
@@ -106,7 +106,7 @@ GAP_SCORE_HEADING_WEIGHT = 0.20
 GAP_EDGE_PENALTY = 0.22
 SPEED_LOOKAHEAD_WINDOW_DEG = 14
 SPEED_TTC_WINDOW_DEG = 8
-SPEED_TARGET_TTC_SEC = 1.30
+SPEED_TARGET_TTC_SEC = 1.05
 
 # Cornering and anti-stall knobs
 CORNER_TRIGGER_DIST_M = 0.80
@@ -121,8 +121,8 @@ EARLY_STALL_TRIGGER_STEPS = 10
 
 # Curvature-aware speed control
 CURVATURE_LOOKAHEAD_HALF_DEG = 40
-CURVATURE_SPEED_REDUCTION_FACTOR = 0.55
-CURVATURE_TRIGGER_RATIO = 0.45
+CURVATURE_SPEED_REDUCTION_FACTOR = 0.35
+CURVATURE_TRIGGER_RATIO = 0.50
 
 # Escalating recovery
 RECOVERY_ESCALATION_WINDOW_STEPS = 150  # ~5 seconds at 32ms
@@ -753,8 +753,8 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
     )
 
     turn_ratio = clamp(abs(steering_rad) / MAX_STEERING_RAD, 0.0, 1.0)
-    steering_factor = 1.0 - 0.88 * turn_ratio
-    clearance_factor = clamp((projected_clearance - 0.14) / 1.35, 0.0, 1.0)
+    steering_factor = 1.0 - 0.45 * turn_ratio
+    clearance_factor = clamp((projected_clearance - 0.08) / 1.2, 0.0, 1.0)
 
     adaptive_floor = adaptive_min_speed(projected_clearance, steering_rad)
     if projected_clearance < 0.45 and turn_ratio > 0.55:
@@ -779,10 +779,12 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
             ttc_target_sec=SPEED_TARGET_TTC_SEC,
         )
         _ai_prev_speed = speed_m_s
-    else:
-        speed_m_s = adaptive_floor + (cap - adaptive_floor) * steering_factor * clearance_factor
-        speed_m_s = clamp(speed_m_s, adaptive_floor, cap)
+        # AI path already applied its own TTC guard — skip redundant outer guard
+        return steering_rad, speed_m_s
 
+    # Classic fallback
+    speed_m_s = adaptive_floor + (cap - adaptive_floor) * steering_factor * clearance_factor
+    speed_m_s = clamp(speed_m_s, adaptive_floor, cap)
     ttc_speed_cap = projected_ttc_clearance / max(SPEED_TARGET_TTC_SEC, 0.1)
     speed_m_s = min(speed_m_s, max(0.0, ttc_speed_cap))
     return steering_rad, speed_m_s
@@ -1055,9 +1057,13 @@ def run_controller():
             if recovery_cooldown == 0:
                 recovery_count = 0
 
-        # Curvature-aware speed limiting
-        curvature_cap = estimate_curvature_speed_limit(ranges, speed_cap)
-        effective_cap = min(speed_cap, curvature_cap)
+        # Curvature-aware speed limiting (only applied to fallback path;
+        # AI path has its own curvature handling to avoid double-penalty)
+        if AI_SPEED_AVAILABLE:
+            effective_cap = speed_cap
+        else:
+            curvature_cap = estimate_curvature_speed_limit(ranges, speed_cap)
+            effective_cap = min(speed_cap, curvature_cap)
 
         if use_advanced:
             steering, target_speed = advanced_gap_follower(ranges, effective_cap)

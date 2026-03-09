@@ -21,31 +21,31 @@ _NUM_SECTORS = 12
 _SECTOR_HALF_FOV_DEG = 90.0  # analyse ±90° in front
 
 # Curvature estimation
-_CURVATURE_SMOOTHING = 0.75  # EMA alpha for curvature signal
+_CURVATURE_SMOOTHING = 0.55  # EMA alpha — lower = smoother/more stable signal
 _MIN_AVG_RANGE = 0.10
 
-# Speed profiles
-_STRAIGHT_THRESHOLD = 0.12        # curvature below this = straight
-_GENTLE_CURVE_THRESHOLD = 0.35    # curvature below this = gentle curve
-_TIGHT_CURVE_THRESHOLD = 0.65     # above this = tight curve
+# Speed profiles — wider bands so fewer scans are classified as "tight"
+_STRAIGHT_THRESHOLD = 0.15        # curvature below this = straight
+_GENTLE_CURVE_THRESHOLD = 0.45    # curvature below this = gentle curve
+_TIGHT_CURVE_THRESHOLD = 0.72     # above this = tight curve
 
-# Speed factors per section type
+# Speed factors per section type — much less aggressive reduction in turns
 _SPEED_FACTOR_STRAIGHT = 1.00
-_SPEED_FACTOR_GENTLE = 0.82
-_SPEED_FACTOR_TIGHT = 0.55
-_SPEED_FACTOR_CHICANE = 0.48
+_SPEED_FACTOR_GENTLE = 0.92
+_SPEED_FACTOR_TIGHT = 0.72
+_SPEED_FACTOR_CHICANE = 0.58
 
 # Predictive braking
 _BRAKE_LOOKAHEAD_SECTORS = 3     # how many sectors ahead to check
-_BRAKE_ANTICIPATION = 0.35       # how much to pre-brake for upcoming curvature
+_BRAKE_ANTICIPATION = 0.22       # lighter pre-braking (was 0.35)
 
 # Acceleration boost
-_ACCEL_BOOST_FACTOR = 1.15       # speed multiplier on exits of corners
-_ACCEL_BOOST_MIN_CLEARANCE = 1.5 # metres ahead needed to boost
+_ACCEL_BOOST_FACTOR = 1.20       # speed multiplier on exits of corners
+_ACCEL_BOOST_MIN_CLEARANCE = 1.2 # metres ahead needed to boost (was 1.5)
 
 # Passage width adaptive margin
-_NARROW_PASSAGE_M = 0.70
-_WIDE_PASSAGE_M = 1.80
+_NARROW_PASSAGE_M = 0.60
+_WIDE_PASSAGE_M = 1.60
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -118,10 +118,10 @@ def estimate_curvature(
     front_avg = sum(front_sectors) / max(len(front_sectors), 1)
     narrowing = _clamp(1.0 - front_avg / max(total_avg, 0.1), 0.0, 1.0)
 
-    raw_curvature = _clamp(0.65 * asymmetry + 0.35 * narrowing, 0.0, 1.0)
+    raw_curvature = _clamp(0.60 * asymmetry + 0.40 * narrowing, 0.0, 1.0)
 
-    # Exponential moving average for stability
-    return smoothing * raw_curvature + (1.0 - smoothing) * prev_curvature
+    # EMA: smoothing = retention of previous value (higher = more stable)
+    return (1.0 - smoothing) * raw_curvature + smoothing * prev_curvature
 
 
 def classify_section(curvature: float) -> str:
@@ -199,9 +199,9 @@ def compute_optimal_speed(
     prev_speed: float,
     sector_ranges: List[float],
     ttc_clearance: float,
-    ttc_target_sec: float = 1.2,
-    speed_ramp_up: float = 0.12,
-    speed_ramp_down: float = 0.18,
+    ttc_target_sec: float = 1.0,
+    speed_ramp_up: float = 0.22,
+    speed_ramp_down: float = 0.16,
 ) -> float:
     """Compute AI-optimised speed combining multiple factors.
 
@@ -210,19 +210,19 @@ def compute_optimal_speed(
     section = classify_section(curvature)
     base_factor = section_speed_factor(section)
 
-    # Steering penalty (less aggressive than before — trust curvature more)
+    # Steering penalty — mild, the section factor already handles most of it
     steer_ratio = _clamp(abs(steering_rad) / max(max_steering, 1e-6), 0.0, 1.0)
-    steer_penalty = 1.0 - 0.60 * steer_ratio  # was 0.70/0.88
+    steer_penalty = 1.0 - 0.35 * steer_ratio  # light touch — curvature does the heavy lifting
 
-    # Clearance factor (smoother ramp)
-    clearance_factor = _clamp((projected_clearance - 0.10) / 1.8, 0.0, 1.0)
+    # Clearance factor — ramp to 1.0 faster so open track ≈ full speed
+    clearance_factor = _clamp((projected_clearance - 0.08) / 1.3, 0.0, 1.0)
 
     # Passage width factor — be bolder in wide passages
     width_factor = _clamp(
         (passage_width - _NARROW_PASSAGE_M) / (_WIDE_PASSAGE_M - _NARROW_PASSAGE_M),
         0.0, 1.0,
     )
-    width_boost = 1.0 + 0.12 * width_factor  # up to 12% faster in wide sections
+    width_boost = 1.0 + 0.18 * width_factor  # up to 18% faster in wide sections
 
     # Predictive braking
     brake_factor = predictive_brake_factor(sector_ranges, curvature)

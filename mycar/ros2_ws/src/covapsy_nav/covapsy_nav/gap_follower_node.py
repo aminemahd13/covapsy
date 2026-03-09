@@ -30,7 +30,7 @@ class GapFollowerNode(Node):
         self.declare_parameter("max_speed_sim_cap", 2.5)
         self.declare_parameter("steering_slew_rate", 0.07)
         self.declare_parameter("max_steering", 0.5)
-        self.declare_parameter("ttc_target_sec", 1.2)
+        self.declare_parameter("ttc_target_sec", 1.0)
         self.declare_parameter("use_ai_speed", True)
 
         self.create_subscription(LaserScan, "/scan_filtered", self.scan_cb, 10)

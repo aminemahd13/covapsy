@@ -264,8 +264,8 @@ def compute_gap_command(
         )
     else:
         # Classic heuristic fallback
-        steer_factor = 1.0 - 0.7 * abs(steering) / max(max_steering, 1e-6)
-        free_space_factor = max(0.0, min(1.0, (projected_clearance - 0.14) / 1.35))
+        steer_factor = 1.0 - 0.45 * abs(steering) / max(max_steering, 1e-6)
+        free_space_factor = max(0.0, min(1.0, (projected_clearance - 0.08) / 1.2))
         speed = min_speed + (max_speed - min_speed) * steer_factor * free_space_factor
 
         speed = max(0.0, min(max_speed, speed))
