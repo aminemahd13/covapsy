@@ -18,6 +18,19 @@ $env:COVAPSY_STANDALONE_LOGS=1
 powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1
 ```
 
+Force LiDAR-only driving (disable RGB/depth fusion):
+```powershell
+$env:COVAPSY_USE_CAMERA_GUIDANCE=0
+powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1
+```
+
+Keep RGB guidance but disable depth influence:
+```powershell
+$env:COVAPSY_USE_CAMERA_GUIDANCE=1
+$env:COVAPSY_USE_DEPTH_GUIDANCE=0
+powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1
+```
+
 If Webots is not in the default location:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1 -WebotsExe "C:\Path\To\webotsw.exe"

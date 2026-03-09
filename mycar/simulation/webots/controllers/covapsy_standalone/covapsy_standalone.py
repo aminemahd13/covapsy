@@ -65,6 +65,8 @@ REVERSE_STEPS = 28
 EMERGENCY_STUCK_STEPS = 6
 EMERGENCY_FRONT_WINDOW_DEG = 12
 EMERGENCY_BLOCK_DISTANCE_M = 0.17
+EMERGENCY_MIN_BLOCK_HITS = 3
+LIDAR_MEDIAN_FILTER_RADIUS = 2
 
 # Stability knobs
 ANGLE_PENALTY_PER_RAD = 0.22
@@ -128,6 +130,14 @@ CAMERA_DEPTH_MAX_VALID_M = 6.0
 CAMERA_ORDER_MIN_SEPARATION_PX = 24
 CAMERA_WRONG_ORDER_SPEED_CAP_M_S = 1.10
 CAMERA_WRONG_ORDER_CONFIDENCE = 0.72
+CAMERA_MIN_DEPTH_SAMPLES = 18
+CAMERA_DEPTH_PERCENTILE = 0.20
+CAMERA_SINGLE_BORDER_CONFIDENCE_CAP = 0.45
+CAMERA_SINGLE_BORDER_BLEND_SCALE = 0.55
+
+# Sensor-fusion env toggles
+CAMERA_GUIDANCE_ENV = "COVAPSY_USE_CAMERA_GUIDANCE"
+DEPTH_GUIDANCE_ENV = "COVAPSY_USE_DEPTH_GUIDANCE"
 
 # Runtime logging controls
 STANDALONE_LOG_EVERY_STEPS = 8
@@ -174,6 +184,28 @@ def angle_of_index(idx):
     return math.radians(deg)
 
 
+def _quantile(values, q):
+    if not values:
+        return None
+    ordered = sorted(values)
+    pos = clamp(int(q * (len(ordered) - 1)), 0, len(ordered) - 1)
+    return float(ordered[pos])
+
+
+def _median_filter_circular(values, radius):
+    if radius <= 0:
+        return list(values)
+    n = len(values)
+    if n == 0:
+        return []
+    window = (2 * radius) + 1
+    out = [MAX_LIDAR_RANGE_M] * n
+    for i in range(n):
+        sample = [values[(i + k) % n] for k in range(-radius, radius + 1)]
+        out[i] = median_or_default(sample, values[i]) if len(sample) == window else values[i]
+    return out
+
+
 def read_lidar_front_zero(lidar):
     """Return lidar ranges as 360 values where index 0 points to the front."""
     raw = list(lidar.getRangeImage())
@@ -181,18 +213,29 @@ def read_lidar_front_zero(lidar):
         return [MAX_LIDAR_RANGE_M] * 360
 
     count = len(raw)
+    if count <= 0:
+        return [MAX_LIDAR_RANGE_M] * 360
+
+    sanitized = []
+    for distance in raw:
+        if MIN_VALID_RANGE_M <= distance <= MAX_LIDAR_RANGE_M and math.isfinite(distance):
+            sanitized.append(float(distance))
+        else:
+            sanitized.append(MAX_LIDAR_RANGE_M)
+
     out = [MAX_LIDAR_RANGE_M] * 360
 
     for i in range(360):
-        # Match CoVAPSy indexing convention used in professor controllers.
-        distance = raw[-i % count]
+        # Match CoVAPSy indexing convention while supporting arbitrary lidar resolution.
+        src_pos = (float(i) * float(count) / 360.0) % float(count)
+        lo = int(src_pos) % count
+        hi = (lo + 1) % count
+        frac = src_pos - lo
+        distance = (1.0 - frac) * sanitized[-lo % count] + frac * sanitized[-hi % count]
         mapped_idx = (i - 180) % 360
-        if MIN_VALID_RANGE_M <= distance <= MAX_LIDAR_RANGE_M:
-            out[mapped_idx] = float(distance)
-        else:
-            out[mapped_idx] = MAX_LIDAR_RANGE_M
+        out[mapped_idx] = float(distance)
 
-    return out
+    return _median_filter_circular(out, LIDAR_MEDIAN_FILTER_RADIUS)
 
 
 def front_sector(ranges):
@@ -432,8 +475,8 @@ def extract_camera_guidance(rgb_camera, depth_camera):
     green_left = 0
     green_right = 0
 
-    nearest_left = MAX_LIDAR_RANGE_M
-    nearest_right = MAX_LIDAR_RANGE_M
+    depth_left_samples = []
+    depth_right_samples = []
 
     for y in range(roi_y0, height, CAMERA_SAMPLE_STRIDE_Y):
         for x in range(0, width, CAMERA_SAMPLE_STRIDE_X):
@@ -483,9 +526,9 @@ def extract_camera_guidance(rgb_camera, depth_camera):
                 depth_value = float(depth_image[depth_idx])
                 if valid_depth_value(depth_value):
                     if on_left_half:
-                        nearest_left = min(nearest_left, depth_value)
+                        depth_left_samples.append(depth_value)
                     else:
-                        nearest_right = min(nearest_right, depth_value)
+                        depth_right_samples.append(depth_value)
 
     steer_lane = 0.0
     red_cx = None
@@ -507,9 +550,12 @@ def extract_camera_guidance(rgb_camera, depth_camera):
         # Seeing only left border (red): bias to the right.
         steer_lane = -CAMERA_SINGLE_BORDER_STEER_RAD
 
+    nearest_left = _quantile(depth_left_samples, CAMERA_DEPTH_PERCENTILE)
+    nearest_right = _quantile(depth_right_samples, CAMERA_DEPTH_PERCENTILE)
+
     steer_depth = 0.0
-    left_valid = nearest_left < MAX_LIDAR_RANGE_M
-    right_valid = nearest_right < MAX_LIDAR_RANGE_M
+    left_valid = nearest_left is not None
+    right_valid = nearest_right is not None
     if left_valid and right_valid:
         side_imbalance = clamp(
             (nearest_right - nearest_left) / CAMERA_DEPTH_BALANCE_RANGE_M,
@@ -527,8 +573,11 @@ def extract_camera_guidance(rgb_camera, depth_camera):
 
     total_colored = red_count + green_count
     confidence = clamp(total_colored / CAMERA_CONFIDENCE_PIXELS, 0.0, 1.0)
-    if red_cx is not None and green_cx is not None:
+    lane_locked = red_cx is not None and green_cx is not None
+    if lane_locked:
         confidence = clamp(confidence + 0.25, 0.0, 1.0)
+    else:
+        confidence = min(confidence, CAMERA_SINGLE_BORDER_CONFIDENCE_CAP)
 
     wrong_order = False
     order_confidence = 0.0
@@ -557,6 +606,8 @@ def extract_camera_guidance(rgb_camera, depth_camera):
         "confidence": confidence,
         "wrong_order": wrong_order,
         "order_confidence": order_confidence,
+        "lane_locked": lane_locked,
+        "depth_sample_count": min(len(depth_left_samples), len(depth_right_samples)),
     }
 
 
@@ -571,6 +622,10 @@ def blend_lidar_and_camera_steering(lidar_steering_rad, camera_state):
         MAX_STEERING_RAD,
     )
     blend = CAMERA_BLEND_MIN + (CAMERA_BLEND_MAX - CAMERA_BLEND_MIN) * confidence
+    if not camera_state.get("lane_locked", False):
+        blend *= CAMERA_SINGLE_BORDER_BLEND_SCALE
+    if camera_state.get("depth_sample_count", 0) < CAMERA_MIN_DEPTH_SAMPLES:
+        blend *= 0.8
     fused = (1.0 - blend) * lidar_steering_rad + blend * camera_steering
 
     if (
@@ -578,7 +633,7 @@ def blend_lidar_and_camera_steering(lidar_steering_rad, camera_state):
         and camera_state.get("order_confidence", 0.0) > CAMERA_WRONG_ORDER_CONFIDENCE
     ):
         # When color order says direction is likely wrong, trust camera guidance more.
-        fused = 0.35 * lidar_steering_rad + 0.65 * camera_steering
+        fused = 0.45 * lidar_steering_rad + 0.55 * camera_steering
 
     return clamp(fused, -MAX_STEERING_RAD, MAX_STEERING_RAD)
 
@@ -691,6 +746,9 @@ def simple_baseline(ranges, speed_cap_m_s):
 
 def emergency_front_blocked(ranges):
     front_window = [deg % 360 for deg in range(-EMERGENCY_FRONT_WINDOW_DEG, EMERGENCY_FRONT_WINDOW_DEG + 1)]
+    close_hits = sum(1 for idx in front_window if ranges[idx] < EMERGENCY_BLOCK_DISTANCE_M)
+    if close_hits < EMERGENCY_MIN_BLOCK_HITS:
+        return False
     nearest = min(ranges[idx] for idx in front_window)
     return nearest < EMERGENCY_BLOCK_DISTANCE_M
 
@@ -787,6 +845,14 @@ def run_controller():
         sensor_time_step,
     )
 
+    use_camera_guidance = env_flag(CAMERA_GUIDANCE_ENV, default=True)
+    use_depth_guidance = env_flag(DEPTH_GUIDANCE_ENV, default=True)
+    if not use_camera_guidance:
+        rgb_camera = None
+        depth_camera = None
+    elif not use_depth_guidance:
+        depth_camera = None
+
     keyboard = driver.getKeyboard()
     keyboard.enable(sensor_time_step)
 
@@ -818,13 +884,25 @@ def run_controller():
         f"(toggle with L or env {STANDALONE_LOG_ENV}=1)"
     )
     if rgb_camera is not None:
-        print(f"Camera guidance: RGB sensor enabled ({rgb_camera_name})")
+        print(
+            f"Camera guidance: RGB sensor enabled ({rgb_camera_name}) "
+            f"[{CAMERA_GUIDANCE_ENV}=1]"
+        )
     else:
-        print("Camera guidance: RGB sensor not found, LiDAR-only mode")
+        print(
+            "Camera guidance: RGB sensor disabled/unavailable, LiDAR-only mode "
+            f"[set {CAMERA_GUIDANCE_ENV}=1 to enable]"
+        )
     if depth_camera is not None:
-        print(f"Camera guidance: depth sensor enabled ({depth_camera_name})")
+        print(
+            f"Camera guidance: depth sensor enabled ({depth_camera_name}) "
+            f"[{DEPTH_GUIDANCE_ENV}=1]"
+        )
     else:
-        print("Camera guidance: depth sensor not found")
+        print(
+            "Camera guidance: depth sensor disabled/unavailable "
+            f"[set {DEPTH_GUIDANCE_ENV}=1 to enable]"
+        )
     print("=" * 64)
 
     set_drive_command(driver, 0.0, 0.0)
@@ -1005,7 +1083,9 @@ def run_controller():
                     f"stall={no_progress_counter}/{low_speed_stall_counter} "
                     f"cam_conf={camera_state['confidence']:.2f} "
                     f"cam_wrong={int(camera_state['wrong_order'])} "
-                    f"cam_order={camera_state['order_confidence']:.2f}"
+                    f"cam_order={camera_state['order_confidence']:.2f} "
+                    f"cam_lock={int(camera_state.get('lane_locked', False))} "
+                    f"cam_depth={camera_state.get('depth_sample_count', 0)}"
                 )
 
         set_drive_command(driver, steering, smoothed_speed)

@@ -20,6 +20,14 @@ def set_sector(ranges, start_deg, end_deg, distance_m):
         ranges[deg % 360] = float(distance_m)
 
 
+class _FakeLidar:
+    def __init__(self, raw):
+        self._raw = raw
+
+    def getRangeImage(self):
+        return self._raw
+
+
 def test_symmetric_corridor_prefers_near_center():
     ranges = make_ranges()
     set_sector(ranges, 70, 100, 0.55)
@@ -213,3 +221,45 @@ def test_wider_fov_finds_gap_in_tight_curve():
     # Should find the gap and steer toward it (positive = left)
     assert steering > 0.0
     assert speed > 0.0
+
+
+def test_read_lidar_front_zero_handles_non_360_resolution():
+    raw = [0.6 + (0.2 * math.sin(i * 0.01)) for i in range(720)]
+    lidar = _FakeLidar(raw)
+    ranges = covapsy_standalone.read_lidar_front_zero(lidar)
+
+    assert len(ranges) == 360
+    assert all(covapsy_standalone.MIN_VALID_RANGE_M <= r <= covapsy_standalone.MAX_LIDAR_RANGE_M for r in ranges)
+
+
+def test_emergency_front_blocked_requires_multiple_hits():
+    ranges = make_ranges(2.0)
+    ranges[0] = 0.10  # single noisy spike should not trigger emergency
+    assert covapsy_standalone.emergency_front_blocked(ranges) is False
+
+    set_sector(ranges, -2, 2, 0.10)  # several close points in front should trigger
+    assert covapsy_standalone.emergency_front_blocked(ranges) is True
+
+
+def test_camera_blend_reduced_without_lane_lock():
+    lidar_steer = 0.0
+    camera_state_unlocked = {
+        "steering_rad": 0.4,
+        "confidence": 1.0,
+        "wrong_order": False,
+        "order_confidence": 0.0,
+        "lane_locked": False,
+        "depth_sample_count": 0,
+    }
+    camera_state_locked = {
+        "steering_rad": 0.4,
+        "confidence": 1.0,
+        "wrong_order": False,
+        "order_confidence": 0.0,
+        "lane_locked": True,
+        "depth_sample_count": covapsy_standalone.CAMERA_MIN_DEPTH_SAMPLES,
+    }
+
+    unlocked = covapsy_standalone.blend_lidar_and_camera_steering(lidar_steer, camera_state_unlocked)
+    locked = covapsy_standalone.blend_lidar_and_camera_steering(lidar_steer, camera_state_locked)
+    assert abs(unlocked) < abs(locked)
