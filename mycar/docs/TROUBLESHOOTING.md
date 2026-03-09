@@ -30,19 +30,24 @@ ros2 launch covapsy_bringup lidar.launch.py
 ```
 
 ### Car does not move
-1. Confirm mode is not `IDLE` or `STOPPED`:
+1. Confirm race has been started and not stopped:
+```bash
+ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
+ros2 topic echo /mcu_status --once
+```
+2. Confirm mode is not `IDLE` or `STOPPED`:
 ```bash
 ros2 topic echo /car_mode --once
 ```
-2. Confirm command exists:
+3. Confirm command exists on bridge input topic:
 ```bash
-ros2 topic echo /cmd_vel --once
+ros2 topic echo /cmd_vel_autonomy --once
 ```
-3. Check backend status:
+4. Check backend status:
 ```bash
 ros2 topic echo /mcu_status --once
 ```
-4. Verify jumper routing matches backend selection.
+5. Verify jumper routing matches backend selection.
 
 ### `spi` backend unstable or no response
 1. Ensure `dtparam=spi=on`.

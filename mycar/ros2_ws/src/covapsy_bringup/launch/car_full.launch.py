@@ -34,6 +34,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("max_speed", default_value="2.0"),
             DeclareLaunchArgument("watchdog_timeout", default_value="0.25"),
+            DeclareLaunchArgument("command_topic", default_value="/cmd_vel_autonomy"),
             Node(
                 package="covapsy_bridge",
                 executable="stm32_bridge_node",
@@ -43,6 +44,7 @@ def generate_launch_description():
                     {
                         "backend": LaunchConfiguration("backend"),
                         "watchdog_timeout": LaunchConfiguration("watchdog_timeout"),
+                        "cmd_topic": LaunchConfiguration("command_topic"),
                     },
                 ],
                 output="screen",
@@ -65,6 +67,8 @@ def generate_launch_description():
                 launch_arguments={
                     "max_speed": LaunchConfiguration("max_speed"),
                     "initial_mode": LaunchConfiguration("initial_mode"),
+                    "command_topic": LaunchConfiguration("command_topic"),
+                    "allow_runtime_mode_switch": "false",
                     "enable_pure_pursuit": "true",
                 }.items(),
             ),

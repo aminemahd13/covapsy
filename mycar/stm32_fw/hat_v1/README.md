@@ -40,6 +40,7 @@ Current defaults:
 - steering byte index: `2`
 - speed byte index: `3`
 - flags byte index: `4`
+  - command bit0 (`RUN_ENABLE`) required for motion
 - checksum byte index: `5`
 - SPI mode: `0`
 - SPI speed on Pi side: `1 MHz`

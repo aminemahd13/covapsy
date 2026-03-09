@@ -61,10 +61,16 @@ ros2 topic echo /wheel_speed --once
 ros2 topic echo /rear_obstacle --once
 ```
 
-Then apply low-speed command:
+Arm race control and then apply low-speed reactive command:
 
 ```bash
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 0.0}}" -r 5
+ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
+ros2 topic pub /cmd_vel_reactive geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 0.0}}" -r 5
 ```
 
 Stop publisher and confirm watchdog stop within `0.25` s.
+Then stop race control:
+
+```bash
+ros2 topic pub /race_stop std_msgs/msg/Bool "{data: true}" --once
+```

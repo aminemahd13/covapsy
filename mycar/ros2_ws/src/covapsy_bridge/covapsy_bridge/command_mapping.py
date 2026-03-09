@@ -56,6 +56,7 @@ def build_spi_frame_6b(
     steering_deg: float,
     speed_m_s: float,
     limits: DriveLimits,
+    command_flags: int = 0,
     header0: int = 0x55,
     header1: int = 0x55,
     steering_index: int = 2,
@@ -70,7 +71,7 @@ def build_spi_frame_6b(
         steering_deg, -limits.max_steering_deg, limits.max_steering_deg
     )
     frame[speed_index] = encode_signed_to_u8(speed_m_s, limits.max_speed_rev, limits.max_speed_fwd)
-    frame[flags_index] = 0
+    frame[flags_index] = int(command_flags) & 0xFF
     frame[5] = sum(frame[:5]) & 0xFF
     return bytes(frame)
 

@@ -4,6 +4,15 @@ stm32_bridge:
     backend: spi
     watchdog_timeout: 0.25
 
+    # Competition control contract:
+    # - bridge accepts motion commands only from cmd_topic
+    # - /race_start arms command acceptance
+    # - /race_stop latches stop (no restart in same run)
+    cmd_topic: /cmd_vel_autonomy
+    competition_mode: true
+    require_start_signal: true
+    allow_restart_after_stop: false
+
     # Common drive limits
     max_steering_deg: 18.0
     max_speed_fwd: 2.0

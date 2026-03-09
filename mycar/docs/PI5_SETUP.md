@@ -68,6 +68,12 @@ Then full stack:
 ros2 launch covapsy_bringup car_full.launch.py backend:=spi initial_mode:=IDLE
 ```
 
+Competition control signals:
+```bash
+ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
+ros2 topic pub /race_stop std_msgs/msg/Bool "{data: true}" --once
+```
+
 Backend switch examples:
 ```bash
 ros2 launch covapsy_bringup car_full.launch.py backend:=uart

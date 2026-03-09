@@ -78,6 +78,12 @@ void FwApp_BuildOutputs(
         }
     }
 
+    /* Competition guard: movement is enabled only when RUN flag is asserted. */
+    if ((effective_cmd.flags & FW_CMD_FLAG_RUN_ENABLE) == 0u)
+    {
+        effective_cmd = zero_command();
+    }
+
     FwControl_CommandToPwm(&effective_cmd, out_pwm);
 
     if (telemetry == 0)

@@ -27,12 +27,16 @@ Procedure:
 ```bash
 ros2 launch covapsy_bringup car_safe.launch.py backend:=pi_pwm initial_mode:=REACTIVE
 ```
-2. Publish test commands:
+2. Arm race control:
 ```bash
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.0}, angular: {z: 0.2}}" -r 5
+ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
 ```
-3. Confirm steering direction and centered straight at zero command.
-4. Reduce min/max if servo hits mechanical stops.
+3. Publish test commands:
+```bash
+ros2 topic pub /cmd_vel_reactive geometry_msgs/msg/Twist "{linear: {x: 0.0}, angular: {z: 0.2}}" -r 5
+```
+4. Confirm steering direction and centered straight at zero command.
+5. Reduce min/max if servo hits mechanical stops.
 
 ## 2. Propulsion Calibration (`pi_pwm` backend)
 Edit:
@@ -57,7 +61,7 @@ Current repository defaults in `backend_params.yaml`:
 Procedure:
 1. Start with low command:
 ```bash
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 0.0}}" -r 5
+ros2 topic pub /cmd_vel_reactive geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 0.0}}" -r 5
 ```
 2. Increase deadband if motor does not move.
 3. Decrease deadband or max delta if startup is too aggressive.
@@ -88,10 +92,10 @@ ros2 topic echo /mcu_status --once
 ros2 topic hz /scan
 ros2 topic hz /scan_filtered
 ros2 topic hz /cmd_vel_reactive
-ros2 topic hz /cmd_vel
+ros2 topic hz /cmd_vel_autonomy
 ```
 
 Expected:
 - Stable LiDAR pipeline.
 - Non-zero reactive command on open path.
-- Final `/cmd_vel` consistent with `mode_controller` state.
+- Final `/cmd_vel_autonomy` consistent with `mode_controller` state.

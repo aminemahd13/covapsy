@@ -20,10 +20,11 @@ Protocol-related constants include:
 
 ## Current
 
-- `FW_PROTOCOL_VERSION = "1.0.0"`
+- `FW_PROTOCOL_VERSION = "1.1.0"`
 - Bridge compatibility target:
   - `spi_header_0=85`
   - `spi_header_1=85`
   - `spi_steering_index=2`
   - `spi_speed_index=3`
   - `spi_flags_index=4`
+  - command flags bit 0 (`RUN_ENABLE`) must be asserted for motion

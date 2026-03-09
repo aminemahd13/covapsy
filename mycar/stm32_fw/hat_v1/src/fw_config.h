@@ -2,7 +2,7 @@
 #define FW_CONFIG_H
 
 /* Protocol version must be copied into release notes for compatibility tracking. */
-#define FW_PROTOCOL_VERSION "1.0.0"
+#define FW_PROTOCOL_VERSION "1.1.0"
 
 #define FW_PROTOCOL_FRAME_SIZE 6u
 #define FW_PROTOCOL_HEADER0 0x55u
@@ -11,6 +11,9 @@
 #define FW_PROTOCOL_SPEED_INDEX 3u
 #define FW_PROTOCOL_FLAGS_INDEX 4u
 #define FW_PROTOCOL_CHECKSUM_INDEX 5u
+
+/* Command flags (Pi -> STM32). */
+#define FW_CMD_FLAG_RUN_ENABLE 0x01u
 
 #define FW_MAX_STEERING_DEG 18.0f
 #define FW_MAX_SPEED_FWD 2.0f

@@ -11,6 +11,7 @@ Run with wheels off ground and emergency stop available.
 2. Valid frame behavior:
 - send frame with correct header/checksum
 - verify steering/speed outputs update as expected
+- with `FLAGS` bit0 (`RUN_ENABLE`) cleared, verify STM32 output remains neutral
 
 3. Invalid frame behavior:
 - wrong header or checksum
@@ -41,12 +42,14 @@ ros2 topic echo /mcu_status --once
 3. Command test:
 
 ```bash
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 0.1}}" -r 10
+ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
+ros2 topic pub /cmd_vel_reactive geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 0.1}}" -r 10
 ```
 
 4. Watchdog test:
 - stop publisher
 - verify neutral within timeout
+- publish `/race_stop` and verify immediate zero output
 
 ## Pass Criteria
 

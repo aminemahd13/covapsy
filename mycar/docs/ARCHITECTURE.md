@@ -7,8 +7,8 @@ Core runtime chain:
 1. `/scan` -> `scan_filter_node` -> `/scan_filtered`
 2. `/scan_filtered` -> `gap_follower_node` -> `/cmd_vel_reactive`
 3. Optional `/racing_path` + `/odom` -> `pure_pursuit_node` -> `/cmd_vel_pursuit`
-4. `mode_controller_node` selects final command on `/cmd_vel`
-5. `/cmd_vel` -> `stm32_bridge_node` (real) or Webots bridge controller (sim)
+4. `mode_controller_node` selects final command on configurable `command_topic`
+5. Real car: `/cmd_vel_autonomy` -> `stm32_bridge_node`; simulation: `/cmd_vel` -> Webots bridge
 
 ## Topic Contract
 | Topic | Type | Producer | Consumer |
@@ -17,7 +17,8 @@ Core runtime chain:
 | `/scan_filtered` | `sensor_msgs/LaserScan` | `scan_filter_node` | `gap_follower_node`, `slam_toolbox` |
 | `/cmd_vel_reactive` | `geometry_msgs/Twist` | `gap_follower_node` | `mode_controller_node` |
 | `/cmd_vel_pursuit` | `geometry_msgs/Twist` | `pure_pursuit_node` | `mode_controller_node` |
-| `/cmd_vel` | `geometry_msgs/Twist` | `mode_controller_node` | bridge node / sim bridge |
+| `/cmd_vel_autonomy` | `geometry_msgs/Twist` | `mode_controller_node` (real-car bringup) | `stm32_bridge_node` |
+| `/cmd_vel` | `geometry_msgs/Twist` | `mode_controller_node` (simulation bringup) | `covapsy_ros2_bridge` |
 | `/wheel_speed` | `std_msgs/Float32` | bridge node / sim bridge | `tft_status_node`, monitoring |
 | `/rear_obstacle` | `std_msgs/Bool` | bridge node / sim bridge | `gap_follower_node` |
 | `/mcu_status` | `std_msgs/String` | bridge node / sim bridge | monitoring |
@@ -44,11 +45,15 @@ Backends:
   - Direct PWM generation on Pi (`rpi-hardware-pwm`).
   - Uses calibrated duty-cycle mapping for propulsion and steering.
 
-All backends expose the same ROS API (`/cmd_vel`, `/wheel_speed`, `/rear_obstacle`, `/mcu_status`).
+All backends expose the same telemetry/status ROS API (`/wheel_speed`, `/rear_obstacle`, `/mcu_status`).
+Bridge drive input is configurable via `cmd_topic`.
+In competition bringup, bridge input defaults to `/cmd_vel_autonomy` (not `/cmd_vel`).
 
 ## Safety and Watchdogs
 - `mode_controller_node` enforces stop in `IDLE` and `STOPPED`.
-- `stm32_bridge_node` watchdog sends zero command on stale `/cmd_vel`.
+- `mode_controller_node` ignores `/set_mode` by default (`allow_runtime_mode_switch=false`).
+- `stm32_bridge_node` gates motion commands with `/race_start` and `/race_stop`.
+- `stm32_bridge_node` watchdog sends zero command on stale drive input.
 - Webots bridge controller applies equivalent stale-command stop behavior.
 
 ## Frames

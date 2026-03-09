@@ -15,10 +15,10 @@ Subscribes:
   /scan_filtered    (LaserScan) - for emergency detection
   /rear_obstacle    (Bool)   - rear IR obstacle sensor
   /wheel_speed      (Float32)- actual wheel speed from bridge
-  /set_mode         (String) - external mode switch
+  /set_mode         (String) - optional external mode switch (disabled by default)
 
 Publishes:
-  /cmd_vel   (Twist)  - final command to STM32 bridge
+  command_topic (Twist) - final command to bridge backend
   /car_mode  (String) - current mode for TFT display
 """
 
@@ -34,6 +34,7 @@ from std_msgs.msg import Bool, Float32, String
 from covapsy_nav.mode_rules import DriveCommand, select_mode_command, select_recovery_command
 
 _ACTIVE_MODES = ('REACTIVE', 'MAPPING', 'RACING')
+_VALID_MODES = ('IDLE', 'REACTIVE', 'MAPPING', 'RACING', 'STOPPED')
 _EMERGENCY_STOP_DIST = 0.15
 _PHASE_DURATIONS = (0.20, 0.10)  # phase 0 (brake), phase 1 (neutral) in seconds
 
@@ -51,8 +52,14 @@ class ModeControllerNode(Node):
         self.declare_parameter('reverse_duration', 1.0)
         self.declare_parameter('reverse_steer', 0.3)
         self.declare_parameter('max_reverse_distance', 0.8)
+        self.declare_parameter('command_topic', '/cmd_vel')
+        self.declare_parameter('allow_runtime_mode_switch', False)
+        self.declare_parameter('lock_mode_after_start', True)
 
-        self.mode = self.get_parameter('initial_mode').value
+        initial_mode = str(self.get_parameter('initial_mode').value).upper()
+        self.mode = initial_mode if initial_mode in _VALID_MODES else 'IDLE'
+        self.command_topic = str(self.get_parameter('command_topic').value)
+        self.race_started = self.mode in _ACTIVE_MODES
 
         # Subscriptions
         self.create_subscription(Twist, '/cmd_vel_reactive', self.reactive_cb, 10)
@@ -65,7 +72,7 @@ class ModeControllerNode(Node):
         self.create_subscription(String, '/set_mode', self.set_mode_cb, 10)
 
         # Publishers
-        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.cmd_pub = self.create_publisher(Twist, self.command_topic, 10)
         self.mode_pub = self.create_publisher(String, '/car_mode', 10)
 
         # Drive state
@@ -89,20 +96,31 @@ class ModeControllerNode(Node):
         # Control loop at 50 Hz
         self.create_timer(0.02, self.control_loop)
 
-        self.get_logger().info(f'Mode controller started in {self.mode} mode')
+        self.get_logger().info(
+            f'Mode controller started in {self.mode} mode '
+            f'(command_topic={self.command_topic})'
+        )
 
     # ---- Callbacks ----
 
     def start_cb(self, msg):
-        if msg.data and self.mode != 'STOPPED':
-            start_mode = str(self.get_parameter('start_mode').value).upper()
-            self.mode = start_mode if start_mode in _ACTIVE_MODES else 'REACTIVE'
-            self._reset_recovery()
-            self.get_logger().info(f'Race started -> {self.mode} mode')
+        if not msg.data:
+            return
+        if self.mode == 'STOPPED':
+            self.get_logger().warn('Ignoring race_start because mode is STOPPED')
+            return
+        if self.race_started:
+            return
+        start_mode = str(self.get_parameter('start_mode').value).upper()
+        self.mode = start_mode if start_mode in _ACTIVE_MODES else 'REACTIVE'
+        self.race_started = True
+        self._reset_recovery()
+        self.get_logger().info(f'Race started -> {self.mode} mode')
 
     def stop_cb(self, msg):
         if msg.data:
             self.mode = 'STOPPED'
+            self.race_started = False
             self._reset_recovery()
             self.get_logger().info('Race STOPPED')
 
@@ -131,13 +149,23 @@ class ModeControllerNode(Node):
         self.wheel_speed = float(msg.data)
 
     def set_mode_cb(self, msg: String):
-        self.set_mode(str(msg.data).strip().upper())
+        self.set_mode(str(msg.data).strip().upper(), from_external=True)
 
-    def set_mode(self, new_mode: str):
+    def set_mode(self, new_mode: str, from_external: bool = False):
         """Externally set mode (e.g., from a service or parameter change)."""
-        valid = ['IDLE', 'REACTIVE', 'MAPPING', 'RACING', 'STOPPED']
-        if new_mode in valid:
+        if from_external:
+            allow_runtime_switch = bool(self.get_parameter('allow_runtime_mode_switch').value)
+            lock_after_start = bool(self.get_parameter('lock_mode_after_start').value)
+            if not allow_runtime_switch:
+                self.get_logger().warn('Ignoring /set_mode (allow_runtime_mode_switch=false)')
+                return
+            if lock_after_start and self.race_started:
+                self.get_logger().warn('Ignoring /set_mode because race has started')
+                return
+
+        if new_mode in _VALID_MODES:
             self.mode = new_mode
+            self.race_started = self.mode in _ACTIVE_MODES
             self._reset_recovery()
             self.get_logger().info(f'Mode changed to: {new_mode}')
 

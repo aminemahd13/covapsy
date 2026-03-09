@@ -99,6 +99,13 @@ Full run:
 ros2 launch covapsy_bringup car_full.launch.py backend:=spi initial_mode:=IDLE
 ```
 
+Competition control signals:
+```bash
+ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
+ros2 topic pub /race_stop std_msgs/msg/Bool "{data: true}" --once
+```
+In competition defaults, bridge motion input is `/cmd_vel_autonomy` and runtime `/set_mode` is disabled.
+
 ## Backends
 - `spi` (default): Pi master SPI <-> STM32 slave, STM32 generates PWM.
 - `uart`: Pi UART <-> STM32 UART, STM32 generates PWM.

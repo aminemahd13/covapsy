@@ -23,7 +23,10 @@ Layout:
 - `H1`: `0x55`
 - `STEER`: uint8 encoded steering
 - `SPEED`: uint8 encoded speed
-- `FLAGS`: currently reserved (must be accepted, can be ignored)
+- `FLAGS`: command flags bitmap
+  - bit 0 (`0x01`) = `RUN_ENABLE`
+    - `1` -> STM32 may apply steering/speed command
+    - `0` -> STM32 forces neutral output
 - `CHECKSUM`: `(H0 + H1 + STEER + SPEED + FLAGS) & 0xFF`
 
 Decode ranges:
@@ -64,3 +67,8 @@ On invalid frame:
 - keep last valid command
 - do not introduce actuator jump
 - still enforce watchdog timeout
+
+Competition guard:
+
+- Even with a valid frame, STM32 forces neutral output when `RUN_ENABLE` is not set.
+- This provides protocol-level enforcement for race start/stop gating from the ROS bridge.

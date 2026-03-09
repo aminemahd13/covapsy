@@ -54,12 +54,20 @@ For each backend (`spi`, `uart`, `pi_pwm`):
 ```bash
 ros2 launch covapsy_bringup car_safe.launch.py backend:=<backend>
 ```
-3. Publish command:
+3. Arm run (required in competition mode):
 ```bash
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 0.0}}" -r 10
+ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
 ```
-4. Stop publisher and verify watchdog stop within configured timeout.
-5. Check status topic:
+4. Publish reactive command (mode controller forwards to bridge command topic):
+```bash
+ros2 topic pub /cmd_vel_reactive geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 0.0}}" -r 10
+```
+5. Stop publisher and verify watchdog stop within configured timeout.
+6. Issue stop signal and verify immediate zero command:
+```bash
+ros2 topic pub /race_stop std_msgs/msg/Bool "{data: true}" --once
+```
+7. Check status topic:
 ```bash
 ros2 topic echo /mcu_status --once
 ```
@@ -68,8 +76,11 @@ Pass criteria:
 - backend initializes without errors
 - actuator response corresponds to command
 - stale command triggers stop
+- `/race_stop` immediately forces zero output
+- status includes `race_running` and `stop_latched` fields
 
 ## 5. Safety Regression Checks
 - Remote stop transitions to `STOPPED`.
-- `IDLE` and `STOPPED` always publish zero `/cmd_vel`.
+- `IDLE` and `STOPPED` always publish zero on the configured command topic.
+- Runtime `/set_mode` is ignored in competition bringup.
 - LiDAR loss handling: mode controller should not command unsafe motion.

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import struct
 import time
-from typing import Optional
 
 import rclpy
 from geometry_msgs.msg import Twist
@@ -20,6 +19,10 @@ from covapsy_bridge.command_mapping import build_uart_drive_frame
 from covapsy_bridge.command_mapping import clamp_drive_command
 from covapsy_bridge.command_mapping import parse_spi_frame_6b
 from covapsy_bridge.command_mapping import pwm_duties_from_command
+from covapsy_bridge.race_control import RaceControlPolicy
+from covapsy_bridge.race_control import RaceControlState
+from covapsy_bridge.race_control import apply_race_signal
+from covapsy_bridge.race_control import race_command_allowed
 
 
 class STM32BridgeNode(Node):
@@ -34,6 +37,10 @@ class STM32BridgeNode(Node):
         self.declare_parameter("max_steering_deg", 18.0)
         self.declare_parameter("max_speed_fwd", 2.0)
         self.declare_parameter("max_speed_rev", -4.0)
+        self.declare_parameter("cmd_topic", "/cmd_vel")
+        self.declare_parameter("competition_mode", True)
+        self.declare_parameter("require_start_signal", True)
+        self.declare_parameter("allow_restart_after_stop", False)
 
         # UART parameters
         self.declare_parameter("uart_port", "/dev/ttyAMA0")
@@ -64,16 +71,28 @@ class STM32BridgeNode(Node):
         self.declare_parameter("pwm_angle_max", 9.3)
         self.declare_parameter("pwm_angle_center", 7.4)
 
+        self.backend = str(self.get_parameter("backend").value).lower()
+        self.watchdog_timeout = float(self.get_parameter("watchdog_timeout").value)
+        self.cmd_topic = str(self.get_parameter("cmd_topic").value)
+        self.race_policy = RaceControlPolicy(
+            competition_mode=bool(self.get_parameter("competition_mode").value),
+            require_start_signal=bool(self.get_parameter("require_start_signal").value),
+            allow_restart_after_stop=bool(self.get_parameter("allow_restart_after_stop").value),
+        )
+        self.race_state = RaceControlState(
+            race_running=not self.race_policy.require_start_signal,
+            stop_latched=False,
+        )
+
         # ROS interface
-        self.create_subscription(Twist, "/cmd_vel", self.cmd_callback, 20)
+        self.create_subscription(Twist, self.cmd_topic, self.cmd_callback, 20)
+        self.create_subscription(Bool, "/race_start", self.race_start_cb, 10)
+        self.create_subscription(Bool, "/race_stop", self.race_stop_cb, 10)
         self.create_subscription(String, "/tft_command", self.tft_callback, 10)
 
         self.speed_pub = self.create_publisher(Float32, "/wheel_speed", 10)
         self.rear_pub = self.create_publisher(Bool, "/rear_obstacle", 10)
         self.status_pub = self.create_publisher(String, "/mcu_status", 10)
-
-        self.backend = str(self.get_parameter("backend").value).lower()
-        self.watchdog_timeout = float(self.get_parameter("watchdog_timeout").value)
 
         self.limits = DriveLimits(
             max_steering_deg=float(self.get_parameter("max_steering_deg").value),
@@ -108,7 +127,12 @@ class STM32BridgeNode(Node):
         self.create_timer(0.05, self.watchdog_check)
         self.create_timer(1.0, self.publish_status)
 
-        self.get_logger().info(f"STM32 bridge started with backend='{self.backend}'")
+        self.get_logger().info(
+            f"STM32 bridge started with backend='{self.backend}' "
+            f"(cmd_topic='{self.cmd_topic}', competition_mode={self.race_policy.competition_mode})"
+        )
+        if self.race_policy.competition_mode and self.race_policy.require_start_signal:
+            self.get_logger().info("Drive commands are gated until /race_start=true")
 
     def _init_backend(self) -> None:
         if self.backend == "uart":
@@ -166,7 +190,41 @@ class STM32BridgeNode(Node):
             self.last_status = f"error:pi_pwm_init:{exc}"
             self.get_logger().warn(self.last_status)
 
+    def race_start_cb(self, msg: Bool) -> None:
+        if not msg.data:
+            return
+        prev = self.race_state
+        self.race_state = apply_race_signal(
+            self.race_state,
+            start=True,
+            stop=False,
+            policy=self.race_policy,
+        )
+        if self.race_state == prev:
+            if (
+                self.race_policy.competition_mode
+                and self.race_state.stop_latched
+                and not self.race_policy.allow_restart_after_stop
+            ):
+                self.get_logger().warn("Ignoring /race_start because stop latch is active")
+            return
+        self.get_logger().info("Race control: start accepted, drive commands enabled")
+
+    def race_stop_cb(self, msg: Bool) -> None:
+        if not msg.data:
+            return
+        self.race_state = apply_race_signal(
+            self.race_state,
+            start=False,
+            stop=True,
+            policy=self.race_policy,
+        )
+        self._set_stop_output()
+        self.get_logger().info("Race control: stop accepted, drive output forced to zero")
+
     def cmd_callback(self, msg: Twist) -> None:
+        if not race_command_allowed(self.race_policy, self.race_state):
+            return
         steering_deg, speed = clamp_drive_command(msg.angular.z, msg.linear.x, self.limits)
         self.current_steering_deg = steering_deg
         self.current_speed_m_s = speed
@@ -189,6 +247,12 @@ class STM32BridgeNode(Node):
         elif self.backend == "pi_pwm":
             self._send_pwm_drive(steering_deg, speed_m_s)
 
+    def _set_stop_output(self) -> None:
+        if abs(self.current_speed_m_s) > 1e-3 or abs(self.current_steering_deg) > 1e-3:
+            self.current_speed_m_s = 0.0
+            self.current_steering_deg = 0.0
+            self._send_drive(0.0, 0.0)
+
     def _send_uart_drive(self, steering_deg: float, speed_m_s: float) -> None:
         if self.serial is None:
             return
@@ -201,10 +265,12 @@ class STM32BridgeNode(Node):
     def _send_spi_drive(self, steering_deg: float, speed_m_s: float) -> None:
         if self.spi is None:
             return
+        command_flags = 0x01 if race_command_allowed(self.race_policy, self.race_state) else 0x00
         frame = build_spi_frame_6b(
             steering_deg=steering_deg,
             speed_m_s=speed_m_s,
             limits=self.limits,
+            command_flags=command_flags,
             header0=int(self.get_parameter("spi_header_0").value),
             header1=int(self.get_parameter("spi_header_1").value),
             steering_index=int(self.get_parameter("spi_steering_index").value),
@@ -272,11 +338,11 @@ class STM32BridgeNode(Node):
             pass
 
     def watchdog_check(self) -> None:
+        if not race_command_allowed(self.race_policy, self.race_state):
+            self._set_stop_output()
+            return
         if (time.monotonic() - self.last_cmd_time) > self.watchdog_timeout:
-            if abs(self.current_speed_m_s) > 1e-3 or abs(self.current_steering_deg) > 1e-3:
-                self.current_speed_m_s = 0.0
-                self.current_steering_deg = 0.0
-                self._send_drive(0.0, 0.0)
+            self._set_stop_output()
 
     def _publish_speed(self, speed_m_s: float) -> None:
         msg = Float32()
@@ -290,7 +356,11 @@ class STM32BridgeNode(Node):
 
     def publish_status(self) -> None:
         msg = String()
-        msg.data = f"backend={self.backend};{self.last_status}"
+        msg.data = (
+            f"backend={self.backend};{self.last_status};"
+            f"race_running={int(self.race_state.race_running)};"
+            f"stop_latched={int(self.race_state.stop_latched)}"
+        )
         self.status_pub.publish(msg)
 
     def destroy_node(self) -> bool:

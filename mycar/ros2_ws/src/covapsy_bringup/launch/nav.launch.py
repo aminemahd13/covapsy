@@ -13,6 +13,8 @@ def generate_launch_description():
             DeclareLaunchArgument("max_speed", default_value="2.0"),
             DeclareLaunchArgument("safety_radius", default_value="0.20"),
             DeclareLaunchArgument("initial_mode", default_value="IDLE"),
+            DeclareLaunchArgument("command_topic", default_value="/cmd_vel"),
+            DeclareLaunchArgument("allow_runtime_mode_switch", default_value="false"),
             DeclareLaunchArgument("enable_pure_pursuit", default_value="true"),
             # Scan filter
             Node(
@@ -74,6 +76,11 @@ def generate_launch_description():
                         "reverse_duration": 1.0,
                         "reverse_steer": 0.3,
                         "max_reverse_distance": 0.8,
+                        "command_topic": LaunchConfiguration("command_topic"),
+                        "allow_runtime_mode_switch": LaunchConfiguration(
+                            "allow_runtime_mode_switch"
+                        ),
+                        "lock_mode_after_start": True,
                     }
                 ],
                 output="screen",
