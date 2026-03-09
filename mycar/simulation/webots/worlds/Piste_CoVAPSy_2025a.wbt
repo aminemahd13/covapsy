@@ -5,6 +5,14 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2022b/project
 EXTERNPROTO "../protos/TT02_2025a.proto"
 
 WorldInfo {
+  basicTimeStep 16
+  contactProperties [
+    ContactProperties {
+      material1 "default"
+      material2 "default"
+      maxContactJoints 24
+    }
+  ]
 }
 Viewpoint {
   orientation 0.007848341978636233 -0.9993363856973255 0.035569534008655625 5.283980281170243

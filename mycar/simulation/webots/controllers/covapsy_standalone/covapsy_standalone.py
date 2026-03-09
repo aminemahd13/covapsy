@@ -39,12 +39,12 @@ FRONT_FOV_DEG = 100
 # Controller tuning
 DISPARITY_THRESHOLD_M = 0.35
 SAFETY_RADIUS_M = 0.18
-MIN_SPEED_M_S = 0.35
-DEFAULT_MAX_SPEED_M_S = 1.80
-MAX_SPEED_LIMIT_M_S = 3.00
-SPEED_RAMP_UP_M_S = 0.02
-SPEED_RAMP_DOWN_M_S = 0.08
-REVERSE_SPEED_M_S = -0.80
+MIN_SPEED_M_S = 0.30
+DEFAULT_MAX_SPEED_M_S = 1.10
+MAX_SPEED_LIMIT_M_S = 5.00
+SPEED_RAMP_UP_M_S = 0.015
+SPEED_RAMP_DOWN_M_S = 0.12
+REVERSE_SPEED_M_S = -0.60
 REVERSE_STEPS = 28
 
 
@@ -158,8 +158,8 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
 
     # 5) Steering + speed adaptation
     steering_rad = clamp(target_angle, -MAX_STEERING_RAD, MAX_STEERING_RAD)
-    steering_factor = 1.0 - 0.70 * abs(steering_rad) / MAX_STEERING_RAD
-    clearance_factor = clamp(nearest_dist / 1.4, 0.25, 1.0)
+    steering_factor = 1.0 - 0.80 * abs(steering_rad) / MAX_STEERING_RAD
+    clearance_factor = clamp(nearest_dist / 2.0, 0.25, 1.0)
     speed_m_s = MIN_SPEED_M_S + (speed_cap_m_s - MIN_SPEED_M_S) * steering_factor * clearance_factor
     speed_m_s = clamp(speed_m_s, MIN_SPEED_M_S, speed_cap_m_s)
     return steering_rad, speed_m_s
@@ -177,7 +177,7 @@ def simple_baseline(ranges, speed_cap_m_s):
 def emergency_front_blocked(ranges):
     front_window = list(range(348, 360)) + list(range(0, 13))
     nearest = min(ranges[idx] for idx in front_window)
-    return nearest < 0.10
+    return nearest < 0.14
 
 
 auto_mode = False
