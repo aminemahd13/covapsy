@@ -1,14 +1,21 @@
 param(
-    [string]$WebotsExe = ""
+    [string]$WebotsExe = "",
+    [ValidateSet("single", "multicar")]
+    [string]$Scenario = "single"
 )
 
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$worldPath = Join-Path $projectRoot "simulation\webots\worlds\Piste_CoVAPSy_2025a_standalone.wbt"
+$worldFile = if ($Scenario -eq "multicar") {
+    "Piste_CoVAPSy_2025a_multicar_standalone.wbt"
+} else {
+    "Piste_CoVAPSy_2025a_standalone.wbt"
+}
+$worldPath = Join-Path $projectRoot ("simulation\webots\worlds\" + $worldFile)
 
 if (-not (Test-Path -LiteralPath $worldPath)) {
-    throw "Standalone world not found at: $worldPath"
+    throw "Standalone world ($Scenario) not found at: $worldPath"
 }
 
 $candidates = @()
@@ -51,6 +58,8 @@ if (-not $resolvedWebots) {
 
 Write-Host "Launching Webots standalone world:"
 Write-Host "  $worldPath"
+Write-Host "Scenario:"
+Write-Host "  $Scenario"
 Write-Host "Using:"
 Write-Host "  $resolvedWebots"
 

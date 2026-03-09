@@ -168,6 +168,140 @@ def test_gap_selection_prefers_clearer_gap_over_only_wider_gap():
     assert chosen == (7, 11)
 
 
+def test_far_center_steering_uses_side_clearance_balance():
+    front_ranges = [0.8, 0.9, 1.0, 1.2, 1.8, 1.9, 2.0]
+    front_angles = [math.radians(v) for v in (-70, -50, -30, 0, 30, 50, 70)]
+    steer = covapsy_standalone._compute_far_center_steering(
+        front_ranges=front_ranges,
+        front_angles=front_angles,
+        camera_offset=0.0,
+        far_center_gain=0.4,
+        camera_center_gain=0.0,
+        fusion_clearance_ref_m=1.2,
+    )
+    assert steer > 0.0
+
+
+def test_close_far_blend_weight_prefers_far_when_open():
+    open_weight = covapsy_standalone._compute_close_far_blend_weight(
+        forward_clearance=2.6,
+        ttc_proxy=3.0,
+        turn_urgency=0.1,
+        far_weight_min=0.10,
+        far_weight_max=0.60,
+        fusion_clearance_ref_m=1.8,
+        ttc_target_sec=1.2,
+    )
+    constrained_weight = covapsy_standalone._compute_close_far_blend_weight(
+        forward_clearance=0.45,
+        ttc_proxy=0.35,
+        turn_urgency=0.85,
+        far_weight_min=0.10,
+        far_weight_max=0.60,
+        fusion_clearance_ref_m=1.8,
+        ttc_target_sec=1.2,
+    )
+    assert 0.10 <= constrained_weight <= 0.60
+    assert 0.10 <= open_weight <= 0.60
+    assert open_weight > constrained_weight
+
+
+def test_close_strategy_stays_dominant_under_low_clearance():
+    ranges = make_ranges(3.5)
+    set_sector(ranges, -12, 12, 0.35)
+    set_sector(ranges, 205, 260, 0.20)
+
+    close_steer, close_speed = covapsy_standalone.advanced_gap_follower(
+        ranges,
+        covapsy_standalone.DEFAULT_MAX_SPEED_M_S,
+        use_close_far_fusion=False,
+        camera_offset=1.0,
+        far_center_gain=0.6,
+        camera_center_gain=0.5,
+    )
+    fused_steer, fused_speed = covapsy_standalone.advanced_gap_follower(
+        ranges,
+        covapsy_standalone.DEFAULT_MAX_SPEED_M_S,
+        use_close_far_fusion=True,
+        camera_offset=1.0,
+        far_center_gain=0.6,
+        camera_center_gain=0.5,
+        far_weight_min=0.05,
+        far_weight_max=0.80,
+        fusion_clearance_ref_m=1.8,
+    )
+
+    assert close_speed >= 0.0
+    assert fused_speed >= 0.0
+    assert abs(close_steer) > 1e-4
+    assert close_steer * fused_steer > 0.0
+    assert abs(fused_steer - close_steer) < 0.18
+
+
+def test_near_weight_increases_with_opponent_confidence():
+    low_conf = covapsy_standalone.compute_near_horizon_weight(
+        base_weight=0.35,
+        front_dist=1.5,
+        clear_ref_dist=1.8,
+        opponent_confidence=0.1,
+        traffic_boost=0.35,
+        clearance_boost=0.30,
+        steer_disagreement_boost=0.20,
+        near_steer=0.05,
+        far_steer=0.05,
+        max_steering=0.5,
+        weight_min=0.2,
+        weight_max=0.9,
+    )
+    high_conf = covapsy_standalone.compute_near_horizon_weight(
+        base_weight=0.35,
+        front_dist=1.5,
+        clear_ref_dist=1.8,
+        opponent_confidence=0.9,
+        traffic_boost=0.35,
+        clearance_boost=0.30,
+        steer_disagreement_boost=0.20,
+        near_steer=0.05,
+        far_steer=0.05,
+        max_steering=0.5,
+        weight_min=0.2,
+        weight_max=0.9,
+    )
+    assert high_conf > low_conf
+
+
+def test_near_weight_increases_with_steer_disagreement():
+    aligned = covapsy_standalone.compute_near_horizon_weight(
+        base_weight=0.35,
+        front_dist=1.5,
+        clear_ref_dist=1.8,
+        opponent_confidence=0.3,
+        traffic_boost=0.35,
+        clearance_boost=0.30,
+        steer_disagreement_boost=0.20,
+        near_steer=0.05,
+        far_steer=0.05,
+        max_steering=0.5,
+        weight_min=0.2,
+        weight_max=0.9,
+    )
+    disagree = covapsy_standalone.compute_near_horizon_weight(
+        base_weight=0.35,
+        front_dist=1.5,
+        clear_ref_dist=1.8,
+        opponent_confidence=0.3,
+        traffic_boost=0.35,
+        clearance_boost=0.30,
+        steer_disagreement_boost=0.20,
+        near_steer=0.45,
+        far_steer=-0.45,
+        max_steering=0.5,
+        weight_min=0.2,
+        weight_max=0.9,
+    )
+    assert disagree > aligned
+
+
 def test_adaptive_safety_radius_narrow_passage():
     """In a narrow passage (~0.85m), safety radius should shrink."""
     ranges = make_ranges()

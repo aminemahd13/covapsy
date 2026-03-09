@@ -12,6 +12,11 @@ This mode runs everything inside Webots with a pure Python controller.
 powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1
 ```
 
+Start standalone multi-car scenario (ego + scripted opponents):
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1 -Scenario multicar
+```
+
 Enable standalone runtime logs from launch:
 ```powershell
 $env:COVAPSY_STANDALONE_LOGS=1
@@ -41,12 +46,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1 -We
 ```
 
 ### World/controller used
-- World: `simulation/webots/worlds/Piste_CoVAPSy_2025a_standalone.wbt`
+- Single-car world: `simulation/webots/worlds/Piste_CoVAPSy_2025a_standalone.wbt`
+- Multi-car world: `simulation/webots/worlds/Piste_CoVAPSy_2025a_multicar_standalone.wbt`
 - Controller: `simulation/webots/controllers/covapsy_standalone/covapsy_standalone.py`
 - Robot name: `TT02_standalone`
 - Sensors used by standalone controller:
   - LiDAR (`RpLidarA2`) for reactive gap following.
   - Simulated RealSense RGB-D (`RealSenseRGB`, `RealSenseDepth`) for red/green wall guidance and direction sanity.
+
+### Standalone tuning env vars (hybrid close/far + tactical)
+- Reactive close/far: `COVAPSY_USE_CLOSE_FAR_FUSION`, `COVAPSY_REACTIVE_FAR_CENTER_GAIN`, `COVAPSY_REACTIVE_CAMERA_CENTER_GAIN`, `COVAPSY_REACTIVE_FAR_WEIGHT_MIN`, `COVAPSY_REACTIVE_FAR_WEIGHT_MAX`, `COVAPSY_REACTIVE_FUSION_CLEARANCE_REF_M`
+- Tactical blend and traffic: `COVAPSY_TRAFFIC_MODE`, `COVAPSY_OPPONENT_DETECT_RANGE_M`, `COVAPSY_FOLLOW_DISTANCE_M`, `COVAPSY_TACTICAL_NEAR_WEIGHT_BASE`, `COVAPSY_TACTICAL_NEAR_WEIGHT_MIN`, `COVAPSY_TACTICAL_NEAR_WEIGHT_MAX`, `COVAPSY_TACTICAL_NEAR_WEIGHT_CLEAR_REF_DIST`, `COVAPSY_TACTICAL_NEAR_WEIGHT_TRAFFIC_BOOST`, `COVAPSY_TACTICAL_NEAR_WEIGHT_CLEARANCE_BOOST`, `COVAPSY_TACTICAL_NEAR_WEIGHT_STEER_DISAGREEMENT_BOOST`, `COVAPSY_PASS_LOCK_SEC`
 
 ### Keyboard controls
 - `A`: start autonomous mode

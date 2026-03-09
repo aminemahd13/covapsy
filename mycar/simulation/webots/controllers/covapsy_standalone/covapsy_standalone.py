@@ -77,6 +77,26 @@ def env_flag(name, default=False):
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def env_float(name, default):
+    raw = os.getenv(name)
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def env_text(name, default):
+    raw = os.getenv(name)
+    if raw is None:
+        return str(default)
+    value = str(raw).strip()
+    if not value:
+        return str(default)
+    return value
+
+
 def ackermann_safe_center_limit(inner_limit_rad, wheelbase_m, track_front_m, margin_rad):
     """Return max center steering so Ackermann inner wheel remains below inner_limit_rad."""
     tan_inner = math.tan(float(inner_limit_rad))
@@ -145,12 +165,20 @@ GAP_EDGE_PENALTY = 0.14
 SPEED_LOOKAHEAD_WINDOW_DEG = 20
 SPEED_TTC_WINDOW_DEG = 12
 SPEED_TARGET_TTC_SEC = 0.80
+FUSION_CLEARANCE_WEIGHT = 0.45
+FUSION_TTC_WEIGHT = 0.35
+FUSION_STABILITY_WEIGHT = 0.20
 
 # Forward-direction safety
 EMERGENCY_WALL_DIST_M = 0.30
 FORWARD_TTC_MIN_SEC = 0.40
 SLEW_URGENCY_DIST_M = 0.55
 SLEW_URGENCY_BOOST = 2.5
+
+# Bubble fallback when primary safety mask removes all traversable points.
+FALLBACK_BUBBLE_RADIUS_SCALE = 0.45
+FALLBACK_BUBBLE_MIN_RADIUS_M = 0.05
+FALLBACK_BUBBLE_MAX_SPAN_DEG = 55.0
 
 # Cornering and anti-stall knobs
 CORNER_TRIGGER_DIST_M = 0.70
@@ -215,6 +243,46 @@ UTURN_STEER_RAD = MAX_STEERING_RAD  # full lock steering during U-turn
 # Sensor-fusion env toggles
 CAMERA_GUIDANCE_ENV = "COVAPSY_USE_CAMERA_GUIDANCE"
 DEPTH_GUIDANCE_ENV = "COVAPSY_USE_DEPTH_GUIDANCE"
+USE_CLOSE_FAR_FUSION_ENV = "COVAPSY_USE_CLOSE_FAR_FUSION"
+REACTIVE_FAR_CENTER_GAIN_ENV = "COVAPSY_REACTIVE_FAR_CENTER_GAIN"
+REACTIVE_CAMERA_CENTER_GAIN_ENV = "COVAPSY_REACTIVE_CAMERA_CENTER_GAIN"
+REACTIVE_FAR_WEIGHT_MIN_ENV = "COVAPSY_REACTIVE_FAR_WEIGHT_MIN"
+REACTIVE_FAR_WEIGHT_MAX_ENV = "COVAPSY_REACTIVE_FAR_WEIGHT_MAX"
+REACTIVE_FUSION_CLEARANCE_REF_ENV = "COVAPSY_REACTIVE_FUSION_CLEARANCE_REF_M"
+
+TRAFFIC_MODE_ENV = "COVAPSY_TRAFFIC_MODE"
+OPPONENT_DETECT_RANGE_ENV = "COVAPSY_OPPONENT_DETECT_RANGE_M"
+FOLLOW_DISTANCE_ENV = "COVAPSY_FOLLOW_DISTANCE_M"
+TACTICAL_NEAR_WEIGHT_BASE_ENV = "COVAPSY_TACTICAL_NEAR_WEIGHT_BASE"
+TACTICAL_NEAR_WEIGHT_MIN_ENV = "COVAPSY_TACTICAL_NEAR_WEIGHT_MIN"
+TACTICAL_NEAR_WEIGHT_MAX_ENV = "COVAPSY_TACTICAL_NEAR_WEIGHT_MAX"
+TACTICAL_NEAR_WEIGHT_CLEAR_REF_ENV = "COVAPSY_TACTICAL_NEAR_WEIGHT_CLEAR_REF_DIST"
+TACTICAL_NEAR_WEIGHT_TRAFFIC_BOOST_ENV = "COVAPSY_TACTICAL_NEAR_WEIGHT_TRAFFIC_BOOST"
+TACTICAL_NEAR_WEIGHT_CLEARANCE_BOOST_ENV = "COVAPSY_TACTICAL_NEAR_WEIGHT_CLEARANCE_BOOST"
+TACTICAL_NEAR_WEIGHT_STEER_DISAGREEMENT_BOOST_ENV = "COVAPSY_TACTICAL_NEAR_WEIGHT_STEER_DISAGREEMENT_BOOST"
+PASS_LOCK_SEC_ENV = "COVAPSY_PASS_LOCK_SEC"
+
+DEFAULT_USE_CLOSE_FAR_FUSION = True
+DEFAULT_REACTIVE_FAR_CENTER_GAIN = 0.35
+DEFAULT_REACTIVE_CAMERA_CENTER_GAIN = 0.25
+DEFAULT_REACTIVE_FAR_WEIGHT_MIN = 0.10
+DEFAULT_REACTIVE_FAR_WEIGHT_MAX = 0.55
+DEFAULT_REACTIVE_FUSION_CLEARANCE_REF_M = 1.8
+
+DEFAULT_TRAFFIC_MODE = "balanced"
+DEFAULT_OPPONENT_DETECT_RANGE_M = 2.8
+DEFAULT_FOLLOW_DISTANCE_M = 1.1
+DEFAULT_PASS_LOCK_SEC = 0.65
+DEFAULT_STEERING_BIAS_GAIN = 0.18
+DEFAULT_TACTICAL_TARGET_TTC_SEC = 1.35
+DEFAULT_NEAR_WEIGHT_BASE = 0.35
+DEFAULT_NEAR_WEIGHT_MIN = 0.20
+DEFAULT_NEAR_WEIGHT_MAX = 0.90
+DEFAULT_NEAR_WEIGHT_CLEAR_REF_DIST = 1.8
+DEFAULT_NEAR_WEIGHT_TRAFFIC_BOOST = 0.35
+DEFAULT_NEAR_WEIGHT_CLEARANCE_BOOST = 0.30
+DEFAULT_NEAR_WEIGHT_STEER_DISAGREEMENT_BOOST = 0.20
+OPPONENT_CONFIDENCE_MIN = 0.30
 
 # Runtime logging controls
 STANDALONE_LOG_EVERY_STEPS = 8
@@ -417,6 +485,211 @@ def side_clearances(front_ranges, front_angles):
     left_clear = median_or_default(left, MAX_LIDAR_RANGE_M)
     right_clear = median_or_default(right, MAX_LIDAR_RANGE_M)
     return left_clear, right_clear
+
+
+def _apply_nearest_obstacle_bubble(
+    front_ranges,
+    reference_ranges,
+    front_angles,
+    effective_safety_radius,
+    max_span_rad=None,
+):
+    nearest_idx = min(
+        range(len(reference_ranges)),
+        key=lambda idx: reference_ranges[idx] + 0.30 * abs(front_angles[idx]),
+    )
+    nearest_dist = reference_ranges[nearest_idx]
+    if nearest_dist < MAX_LIDAR_RANGE_M:
+        nearest_angle = front_angles[nearest_idx]
+        arc_scale = max(nearest_dist, MIN_VALID_RANGE_M)
+        for i in range(len(front_ranges)):
+            delta = abs(front_angles[i] - nearest_angle)
+            if max_span_rad is not None and delta > max_span_rad:
+                continue
+            arc_dist = arc_scale * delta
+            if arc_dist < effective_safety_radius:
+                front_ranges[i] = 0.0
+
+    return nearest_idx, nearest_dist
+
+
+def _mask_gap_shoulders(front_ranges, front_angles):
+    gap_limit_rad = math.radians(GAP_SELECTION_FOV_DEG)
+    for i in range(len(front_ranges)):
+        if abs(front_angles[i]) > gap_limit_rad:
+            front_ranges[i] = 0.0
+
+
+def _find_best_gap_target(front_ranges, front_angles):
+    traversable = [r > MIN_VALID_RANGE_M for r in front_ranges]
+    free_gaps = find_free_gaps(traversable)
+    best_gap = choose_best_gap(front_ranges, front_angles, free_gaps)
+    if best_gap is None:
+        return None, None
+
+    gap_start, gap_end = best_gap
+    gap_center = 0.5 * (gap_start + gap_end)
+    gap_half_span = max(0.5 * (gap_end - gap_start + 1), 1.0)
+    best_local = max(
+        range(gap_start, gap_end + 1),
+        key=lambda idx: (
+            front_ranges[idx]
+            - ANGLE_PENALTY_PER_RAD * abs(front_angles[idx])
+            - GAP_EDGE_PENALTY * abs((idx - gap_center) / gap_half_span)
+        ),
+    )
+    return front_angles[best_local], best_gap
+
+
+def _compute_far_center_steering(
+    front_ranges,
+    front_angles,
+    camera_offset,
+    far_center_gain,
+    camera_center_gain,
+    fusion_clearance_ref_m,
+):
+    left_clear, right_clear = side_clearances(front_ranges, front_angles)
+    clearance_ref = max(float(fusion_clearance_ref_m), 0.1)
+    lateral_balance = clamp((left_clear - right_clear) / clearance_ref, -1.0, 1.0)
+    lidar_center = float(far_center_gain) * lateral_balance
+    camera_center = float(camera_center_gain) * clamp(camera_offset, -1.0, 1.0)
+    return clamp(lidar_center + camera_center, -MAX_STEERING_RAD, MAX_STEERING_RAD)
+
+
+def _compute_close_far_blend_weight(
+    forward_clearance,
+    ttc_proxy,
+    turn_urgency,
+    far_weight_min,
+    far_weight_max,
+    fusion_clearance_ref_m,
+    ttc_target_sec,
+):
+    lo = clamp(far_weight_min, 0.0, 1.0)
+    hi = clamp(far_weight_max, 0.0, 1.0)
+    if lo > hi:
+        lo, hi = hi, lo
+
+    clearance_score = clamp(forward_clearance / max(float(fusion_clearance_ref_m), 0.1), 0.0, 1.0)
+    ttc_score = clamp(ttc_proxy / max(float(ttc_target_sec), 0.2), 0.0, 1.0)
+    stability_score = 1.0 - clamp(turn_urgency, 0.0, 1.0)
+    openness = (
+        FUSION_CLEARANCE_WEIGHT * clearance_score
+        + FUSION_TTC_WEIGHT * ttc_score
+        + FUSION_STABILITY_WEIGHT * stability_score
+    )
+    return lo + (hi - lo) * openness
+
+
+def traffic_mode_pass_margin(mode):
+    value = str(mode).strip().lower()
+    if value == "aggressive":
+        return 0.14
+    if value == "conservative":
+        return 0.28
+    return 0.20
+
+
+def traffic_mode_speed_bias(mode):
+    value = str(mode).strip().lower()
+    if value == "aggressive":
+        return 1.0
+    if value == "conservative":
+        return 0.82
+    return 0.92
+
+
+def select_passing_side(front_dist, left_clear, right_clear, pass_margin, follow_distance):
+    if front_dist > follow_distance:
+        return 0
+    if (left_clear - right_clear) > pass_margin:
+        return 1
+    if (right_clear - left_clear) > pass_margin:
+        return -1
+    return 0
+
+
+def compute_near_horizon_weight(
+    base_weight,
+    front_dist,
+    clear_ref_dist,
+    opponent_confidence,
+    traffic_boost,
+    clearance_boost,
+    steer_disagreement_boost,
+    near_steer,
+    far_steer,
+    max_steering,
+    weight_min,
+    weight_max,
+):
+    w_min = clamp(weight_min, 0.0, 1.0)
+    w_max = clamp(weight_max, 0.0, 1.0)
+    if w_min > w_max:
+        w_min, w_max = w_max, w_min
+
+    clear_ref = max(float(clear_ref_dist), 0.1)
+    clearance_risk = 1.0 - clamp(front_dist / clear_ref, 0.0, 1.0)
+    opp_risk = clamp(opponent_confidence, 0.0, 1.0)
+    steer_span = max(abs(float(max_steering)), 1e-6)
+    steer_disagreement = clamp(abs(float(near_steer) - float(far_steer)) / steer_span, 0.0, 1.0)
+    raw = (
+        float(base_weight)
+        + float(traffic_boost) * opp_risk
+        + float(clearance_boost) * clearance_risk
+        + float(steer_disagreement_boost) * steer_disagreement
+    )
+    return clamp(raw, w_min, w_max)
+
+
+def blend_near_far_command(near_speed, near_steer, far_speed, far_steer, near_weight):
+    w = clamp(near_weight, 0.0, 1.0)
+    speed = w * float(near_speed) + (1.0 - w) * float(far_speed)
+    steer = w * float(near_steer) + (1.0 - w) * float(far_steer)
+    return speed, steer
+
+
+def compute_ttc_limited_speed(front_dist, desired_speed, target_ttc_sec):
+    speed = max(0.0, float(desired_speed))
+    ttc_target = max(float(target_ttc_sec), 0.2)
+    ttc = float(front_dist) / max(speed, 0.05)
+    if ttc < ttc_target:
+        speed = min(speed, float(front_dist) / ttc_target)
+    return max(0.0, speed)
+
+
+def apply_rule_guards(speed_m_s, steering_rad, front_dist, left_clear, right_clear, max_speed_m_s):
+    speed = clamp(speed_m_s, 0.0, max_speed_m_s)
+    steer = clamp(steering_rad, -0.55, 0.55)
+
+    if front_dist < 0.22:
+        return 0.0, 0.0
+    if front_dist < 0.75 and min(left_clear, right_clear) < 0.60:
+        steer *= 0.45
+        speed *= 0.65
+    if abs(steer) > 0.35 and speed > 1.6:
+        speed = 1.6
+    return max(0.0, speed), steer
+
+
+def _scan_metrics(ranges, opponent_detect_range_m):
+    _idx, front_ranges, front_angles = front_sector(ranges)
+    if not front_ranges:
+        return MAX_LIDAR_RANGE_M, MAX_LIDAR_RANGE_M, MAX_LIDAR_RANGE_M, 0.0
+
+    front_min = front_clearance(ranges)
+    left_clear, right_clear = side_clearances(front_ranges, front_angles)
+    detect_range = max(float(opponent_detect_range_m), 0.4)
+    near_front = [
+        r
+        for r, a in zip(front_ranges, front_angles)
+        if abs(math.degrees(a)) < 65.0 and r < detect_range
+    ]
+    points_score = clamp(len(near_front) / 30.0, 0.0, 1.0)
+    dist_score = clamp((detect_range - front_min) / detect_range, 0.0, 1.0)
+    lidar_conf = clamp(0.55 * points_score + 0.45 * dist_score, 0.0, 1.0)
+    return front_min, left_clear, right_clear, lidar_conf
 
 
 def apply_turn_direction_sanity(steering_rad, front_ranges, front_angles):
@@ -723,10 +996,24 @@ def blend_lidar_and_camera_steering(lidar_steering_rad, camera_state):
     return clamp(fused, -MAX_STEERING_RAD, MAX_STEERING_RAD)
 
 
-def advanced_gap_follower(ranges, speed_cap_m_s, vehicle_state=None):
+def advanced_gap_follower(
+    ranges,
+    speed_cap_m_s,
+    vehicle_state=None,
+    camera_offset=0.0,
+    use_close_far_fusion=DEFAULT_USE_CLOSE_FAR_FUSION,
+    far_center_gain=DEFAULT_REACTIVE_FAR_CENTER_GAIN,
+    camera_center_gain=DEFAULT_REACTIVE_CAMERA_CENTER_GAIN,
+    far_weight_min=DEFAULT_REACTIVE_FAR_WEIGHT_MIN,
+    far_weight_max=DEFAULT_REACTIVE_FAR_WEIGHT_MAX,
+    fusion_clearance_ref_m=DEFAULT_REACTIVE_FUSION_CLEARANCE_REF_M,
+    return_debug=False,
+):
     global _ai_prev_speed
     _front_indices, front_ranges, front_angles = front_sector(ranges)
     if not front_ranges:
+        if return_debug:
+            return 0.0, 0.0, {"valid": False, "reason": "no_front_ranges"}
         return 0.0, 0.0
 
     reference_ranges = front_ranges.copy()
@@ -746,53 +1033,82 @@ def advanced_gap_follower(ranges, speed_cap_m_s, vehicle_state=None):
                 for j in range(lo, hi):
                     front_ranges[j] = min(front_ranges[j], closer_range)
 
-    # 2) Safety bubble around nearest obstacle (adaptive radius in narrow passages)
+    front_after_disparity = front_ranges.copy()
+
+    # 2) Safety bubble around nearest obstacle (adaptive radius in narrow passages).
     effective_safety_radius = adaptive_safety_radius(reference_ranges, front_angles)
-    nearest_idx = min(
-        range(len(reference_ranges)),
-        key=lambda idx: reference_ranges[idx] + 0.30 * abs(front_angles[idx]),
+    _nearest_idx, nearest_dist = _apply_nearest_obstacle_bubble(
+        front_ranges=front_ranges,
+        reference_ranges=reference_ranges,
+        front_angles=front_angles,
+        effective_safety_radius=effective_safety_radius,
     )
-    nearest_dist = reference_ranges[nearest_idx]
-    if nearest_dist < MAX_LIDAR_RANGE_M:
-        nearest_angle = front_angles[nearest_idx]
-        arc_scale = max(nearest_dist, MIN_VALID_RANGE_M)
-        for i in range(len(front_ranges)):
-            arc_dist = arc_scale * abs(front_angles[i] - nearest_angle)
-            if arc_dist < effective_safety_radius:
-                front_ranges[i] = 0.0
+    _mask_gap_shoulders(front_ranges, front_angles)
 
-    # 3) Mask out far-shoulder regions to prevent phantom gap selection
-    gap_limit_rad = math.radians(GAP_SELECTION_FOV_DEG)
-    for i in range(len(front_ranges)):
-        if abs(front_angles[i]) > gap_limit_rad:
-            front_ranges[i] = 0.0
-
-    # 4) Best free gap (width + clearance score)
-    traversable = [r > MIN_VALID_RANGE_M for r in front_ranges]
-    free_gaps = find_free_gaps(traversable)
-    best_gap = choose_best_gap(front_ranges, front_angles, free_gaps)
+    # 3) Best free gap (width + clearance score), with deterministic fallback bubble.
+    target_angle, best_gap = _find_best_gap_target(front_ranges, front_angles)
+    gap_fallback_used = False
     if best_gap is None:
-        return 0.0, 0.0
+        gap_fallback_used = True
+        front_ranges = front_after_disparity.copy()
+        fallback_safety_radius = max(
+            effective_safety_radius * FALLBACK_BUBBLE_RADIUS_SCALE,
+            FALLBACK_BUBBLE_MIN_RADIUS_M,
+        )
+        _apply_nearest_obstacle_bubble(
+            front_ranges=front_ranges,
+            reference_ranges=reference_ranges,
+            front_angles=front_angles,
+            effective_safety_radius=fallback_safety_radius,
+            max_span_rad=math.radians(FALLBACK_BUBBLE_MAX_SPAN_DEG),
+        )
+        _mask_gap_shoulders(front_ranges, front_angles)
+        target_angle, best_gap = _find_best_gap_target(front_ranges, front_angles)
+        if best_gap is None:
+            if return_debug:
+                return 0.0, 0.0, {
+                    "valid": False,
+                    "reason": "no_gap_after_fallback",
+                    "gap_fallback_used": gap_fallback_used,
+                }
+            return 0.0, 0.0
 
-    # 5) Best point in selected gap with center and heading bias.
-    gap_start, gap_end = best_gap
-    gap_center = 0.5 * (gap_start + gap_end)
-    gap_half_span = max(0.5 * (gap_end - gap_start + 1), 1.0)
-    best_local = max(
-        range(gap_start, gap_end + 1),
-        key=lambda idx: (
-            front_ranges[idx]
-            - ANGLE_PENALTY_PER_RAD * abs(front_angles[idx])
-            - GAP_EDGE_PENALTY * abs((idx - gap_center) / gap_half_span)
-        ),
-    )
-    target_angle = front_angles[best_local]
+    # 4) Close/far steering synthesis.
     forward_center_dist = forward_clearance_for_heading(reference_ranges, front_angles, 0.0, 12)
     corner_bias = compute_corner_bias(reference_ranges, front_angles, forward_center_dist)
+    close_steering = clamp(target_angle + corner_bias, -MAX_STEERING_RAD, MAX_STEERING_RAD)
+    close_steering = apply_turn_direction_sanity(close_steering, reference_ranges, front_angles)
 
-    # 6) Steering + speed adaptation
-    steering_rad = clamp(target_angle + corner_bias, -MAX_STEERING_RAD, MAX_STEERING_RAD)
-    steering_rad = apply_turn_direction_sanity(steering_rad, reference_ranges, front_angles)
+    far_steering = close_steering
+    far_weight = 0.0
+    desired_steering = close_steering
+    if use_close_far_fusion:
+        far_steering = _compute_far_center_steering(
+            front_ranges=reference_ranges,
+            front_angles=front_angles,
+            camera_offset=camera_offset,
+            far_center_gain=far_center_gain,
+            camera_center_gain=camera_center_gain,
+            fusion_clearance_ref_m=fusion_clearance_ref_m,
+        )
+        ttc_proxy = forward_center_dist / max(abs(_ai_prev_speed), MIN_SPEED_FLOOR_M_S * 0.8, 0.05)
+        turn_urgency = abs(close_steering) / max(MAX_STEERING_RAD, 1e-6)
+        far_weight = _compute_close_far_blend_weight(
+            forward_clearance=forward_center_dist,
+            ttc_proxy=ttc_proxy,
+            turn_urgency=turn_urgency,
+            far_weight_min=far_weight_min,
+            far_weight_max=far_weight_max,
+            fusion_clearance_ref_m=fusion_clearance_ref_m,
+            ttc_target_sec=SPEED_TARGET_TTC_SEC,
+        )
+        desired_steering = (
+            (1.0 - far_weight) * close_steering + far_weight * far_steering
+        )
+        desired_steering = clamp(desired_steering, -MAX_STEERING_RAD, MAX_STEERING_RAD)
+
+    # 5) Steering + speed adaptation
+    steering_rad = desired_steering
     projected_clearance = forward_clearance_for_heading(
         reference_ranges,
         front_angles,
@@ -820,7 +1136,6 @@ def advanced_gap_follower(ranges, speed_cap_m_s, vehicle_state=None):
     if AI_SPEED_AVAILABLE:
         sectors = extract_sector_ranges(ranges)
         curvature = estimate_curvature(sectors)
-        # Fuse with IMU for faster curvature detection
         if vehicle_state is not None:
             curvature = fuse_curvature_with_imu(curvature, vehicle_state)
         if vehicle_state is not None:
@@ -852,25 +1167,11 @@ def advanced_gap_follower(ranges, speed_cap_m_s, vehicle_state=None):
                 ttc_clearance=projected_ttc_clearance,
                 ttc_target_sec=SPEED_TARGET_TTC_SEC,
             )
-        # Forward-direction safety guard
-        actual_fwd = forward_clearance_for_heading(
-            reference_ranges, front_angles, 0.0, SPEED_LOOKAHEAD_WINDOW_DEG,
-        )
-        if speed_m_s > 0.05 and actual_fwd < 2.0:
-            fwd_ttc = actual_fwd / speed_m_s
-            if fwd_ttc < FORWARD_TTC_MIN_SEC:
-                speed_m_s = min(speed_m_s, max(adaptive_floor * 0.3, actual_fwd / FORWARD_TTC_MIN_SEC))
-        if actual_fwd < EMERGENCY_WALL_DIST_M:
-            speed_m_s = min(speed_m_s, adaptive_floor)
-
-        _ai_prev_speed = speed_m_s
-        return steering_rad, speed_m_s
-
-    # Classic fallback
-    speed_m_s = adaptive_floor + (cap - adaptive_floor) * steering_factor * clearance_factor
-    speed_m_s = clamp(speed_m_s, adaptive_floor, cap)
-    ttc_speed_cap = projected_ttc_clearance / max(SPEED_TARGET_TTC_SEC, 0.1)
-    speed_m_s = min(speed_m_s, max(0.0, ttc_speed_cap))
+    else:
+        speed_m_s = adaptive_floor + (cap - adaptive_floor) * steering_factor * clearance_factor
+        speed_m_s = clamp(speed_m_s, adaptive_floor, cap)
+        ttc_speed_cap = projected_ttc_clearance / max(SPEED_TARGET_TTC_SEC, 0.1)
+        speed_m_s = min(speed_m_s, max(0.0, ttc_speed_cap))
 
     # Forward-direction safety guard
     actual_fwd = forward_clearance_for_heading(
@@ -883,6 +1184,22 @@ def advanced_gap_follower(ranges, speed_cap_m_s, vehicle_state=None):
     if actual_fwd < EMERGENCY_WALL_DIST_M:
         speed_m_s = min(speed_m_s, adaptive_floor)
 
+    _ai_prev_speed = speed_m_s
+    if return_debug:
+        return steering_rad, speed_m_s, {
+            "valid": True,
+            "close_steering_rad": close_steering,
+            "far_steering_rad": far_steering,
+            "far_weight": far_weight,
+            "desired_steering_rad": steering_rad,
+            "forward_clearance_m": actual_fwd,
+            "projected_clearance_m": projected_clearance,
+            "projected_ttc_clearance_m": projected_ttc_clearance,
+            "left_clear_m": left_clear,
+            "right_clear_m": right_clear,
+            "gap_fallback_used": gap_fallback_used,
+            "best_gap": best_gap,
+        }
     return steering_rad, speed_m_s
 
 
@@ -1031,6 +1348,41 @@ def run_controller():
     elif not use_depth_guidance:
         depth_camera = None
 
+    use_close_far_fusion = env_flag(USE_CLOSE_FAR_FUSION_ENV, default=DEFAULT_USE_CLOSE_FAR_FUSION)
+    reactive_far_center_gain = env_float(REACTIVE_FAR_CENTER_GAIN_ENV, DEFAULT_REACTIVE_FAR_CENTER_GAIN)
+    reactive_camera_center_gain = env_float(
+        REACTIVE_CAMERA_CENTER_GAIN_ENV, DEFAULT_REACTIVE_CAMERA_CENTER_GAIN
+    )
+    reactive_far_weight_min = env_float(REACTIVE_FAR_WEIGHT_MIN_ENV, DEFAULT_REACTIVE_FAR_WEIGHT_MIN)
+    reactive_far_weight_max = env_float(REACTIVE_FAR_WEIGHT_MAX_ENV, DEFAULT_REACTIVE_FAR_WEIGHT_MAX)
+    reactive_fusion_clearance_ref_m = env_float(
+        REACTIVE_FUSION_CLEARANCE_REF_ENV, DEFAULT_REACTIVE_FUSION_CLEARANCE_REF_M
+    )
+
+    traffic_mode = env_text(TRAFFIC_MODE_ENV, DEFAULT_TRAFFIC_MODE).strip().lower()
+    opponent_detect_range_m = max(
+        0.4,
+        env_float(OPPONENT_DETECT_RANGE_ENV, DEFAULT_OPPONENT_DETECT_RANGE_M),
+    )
+    follow_distance_m = max(0.2, env_float(FOLLOW_DISTANCE_ENV, DEFAULT_FOLLOW_DISTANCE_M))
+    near_weight_base = env_float(TACTICAL_NEAR_WEIGHT_BASE_ENV, DEFAULT_NEAR_WEIGHT_BASE)
+    near_weight_min = env_float(TACTICAL_NEAR_WEIGHT_MIN_ENV, DEFAULT_NEAR_WEIGHT_MIN)
+    near_weight_max = env_float(TACTICAL_NEAR_WEIGHT_MAX_ENV, DEFAULT_NEAR_WEIGHT_MAX)
+    near_weight_clear_ref_dist = env_float(
+        TACTICAL_NEAR_WEIGHT_CLEAR_REF_ENV, DEFAULT_NEAR_WEIGHT_CLEAR_REF_DIST
+    )
+    near_weight_traffic_boost = env_float(
+        TACTICAL_NEAR_WEIGHT_TRAFFIC_BOOST_ENV, DEFAULT_NEAR_WEIGHT_TRAFFIC_BOOST
+    )
+    near_weight_clearance_boost = env_float(
+        TACTICAL_NEAR_WEIGHT_CLEARANCE_BOOST_ENV, DEFAULT_NEAR_WEIGHT_CLEARANCE_BOOST
+    )
+    near_weight_steer_disagreement_boost = env_float(
+        TACTICAL_NEAR_WEIGHT_STEER_DISAGREEMENT_BOOST_ENV,
+        DEFAULT_NEAR_WEIGHT_STEER_DISAGREEMENT_BOOST,
+    )
+    pass_lock_sec = max(0.0, env_float(PASS_LOCK_SEC_ENV, DEFAULT_PASS_LOCK_SEC))
+
     keyboard = driver.getKeyboard()
     keyboard.enable(sensor_time_step)
 
@@ -1058,6 +1410,8 @@ def run_controller():
     prev_imu_speed = 0.0
     prev_imu_yaw = 0.0
     prev_imu_time = 0.0
+    pass_side = 0
+    pass_lock_until = 0.0
 
     print("=" * 64)
     print("COVAPSY Standalone Webots Controller")
@@ -1092,6 +1446,18 @@ def run_controller():
         print("IMU sensor fusion: ENABLED (EKF state estimator active)")
     else:
         print("IMU sensor fusion: DISABLED (no InertialUnit or estimator unavailable)")
+    print(
+        "Reactive close/far fusion: "
+        f"{'ON' if use_close_far_fusion else 'OFF'} "
+        f"(far_gain={reactive_far_center_gain:.2f}, cam_gain={reactive_camera_center_gain:.2f}, "
+        f"w=[{reactive_far_weight_min:.2f},{reactive_far_weight_max:.2f}], "
+        f"clear_ref={reactive_fusion_clearance_ref_m:.2f})"
+    )
+    print(
+        "Standalone tactical blending: "
+        f"traffic_mode={traffic_mode}, detect_range={opponent_detect_range_m:.2f}m, "
+        f"follow={follow_distance_m:.2f}m, near_w=[{near_weight_min:.2f},{near_weight_max:.2f}]"
+    )
     while driver.step() != -1:
         while True:
             key = keyboard.getKey()
@@ -1113,6 +1479,8 @@ def run_controller():
                 wrong_order_counter = 0
                 uturn_phase = 0
                 uturn_ticks = 0
+                pass_side = 0
+                pass_lock_until = 0.0
                 print("[standalone] auto mode ON")
             elif key in (ord("N"), ord("n")):
                 auto_mode = False
@@ -1125,6 +1493,8 @@ def run_controller():
                 wrong_order_counter = 0
                 uturn_phase = 0
                 uturn_ticks = 0
+                pass_side = 0
+                pass_lock_until = 0.0
                 set_drive_command(driver, 0.0, 0.0)
                 print("[standalone] auto mode OFF")
             elif key in (ord("S"), ord("s")):
@@ -1267,13 +1637,112 @@ def run_controller():
             curvature_cap = estimate_curvature_speed_limit(ranges, speed_cap)
             effective_cap = min(speed_cap, curvature_cap)
 
+        camera_state = extract_camera_guidance(rgb_camera, depth_camera)
+        camera_offset = float(camera_state.get("steering_rad", 0.0))
+
+        reactive_debug = {}
         if use_advanced:
-            steering, target_speed = advanced_gap_follower(ranges, effective_cap, vehicle_state)
+            steering, target_speed, reactive_debug = advanced_gap_follower(
+                ranges,
+                effective_cap,
+                vehicle_state=vehicle_state,
+                camera_offset=camera_offset,
+                use_close_far_fusion=use_close_far_fusion,
+                far_center_gain=reactive_far_center_gain,
+                camera_center_gain=reactive_camera_center_gain,
+                far_weight_min=reactive_far_weight_min,
+                far_weight_max=reactive_far_weight_max,
+                fusion_clearance_ref_m=reactive_fusion_clearance_ref_m,
+                return_debug=True,
+            )
         else:
             steering, target_speed = simple_baseline(ranges, effective_cap)
+            reactive_debug = {
+                "valid": True,
+                "close_steering_rad": steering,
+                "far_steering_rad": steering,
+                "far_weight": 0.0,
+                "desired_steering_rad": steering,
+                "gap_fallback_used": False,
+            }
 
-        camera_state = extract_camera_guidance(rgb_camera, depth_camera)
+        # Keep legacy camera blend as additional near-horizon correction.
         steering = blend_lidar_and_camera_steering(steering, camera_state)
+
+        # Tactical near/far blend under traffic pressure.
+        front_min, left_clear, right_clear, lidar_conf = _scan_metrics(
+            ranges,
+            opponent_detect_range_m=opponent_detect_range_m,
+        )
+        camera_conf = clamp(1.0 - abs(camera_offset), 0.0, 1.0)
+        confidence = clamp((0.8 * lidar_conf) + (0.2 * camera_conf), 0.0, 1.0)
+
+        near_speed = float(target_speed)
+        near_steer = float(steering)
+        far_speed = float(target_speed)
+        far_steer = float(reactive_debug.get("far_steering_rad", steering))
+        near_weight = compute_near_horizon_weight(
+            base_weight=near_weight_base,
+            front_dist=front_min,
+            clear_ref_dist=near_weight_clear_ref_dist,
+            opponent_confidence=confidence,
+            traffic_boost=near_weight_traffic_boost,
+            clearance_boost=near_weight_clearance_boost,
+            steer_disagreement_boost=near_weight_steer_disagreement_boost,
+            near_steer=near_steer,
+            far_steer=far_steer,
+            max_steering=MAX_STEERING_RAD,
+            weight_min=near_weight_min,
+            weight_max=near_weight_max,
+        )
+        base_speed, base_steer = blend_near_far_command(
+            near_speed=near_speed,
+            near_steer=near_steer,
+            far_speed=far_speed,
+            far_steer=far_steer,
+            near_weight=near_weight,
+        )
+
+        pass_margin = traffic_mode_pass_margin(traffic_mode)
+        side = select_passing_side(
+            front_dist=front_min,
+            left_clear=left_clear,
+            right_clear=right_clear,
+            pass_margin=pass_margin,
+            follow_distance=follow_distance_m,
+        )
+        now_sec = driver.getTime()
+        if now_sec < pass_lock_until and pass_side != 0:
+            side = pass_side
+        elif side != 0:
+            pass_side = side
+            pass_lock_until = now_sec + pass_lock_sec
+        else:
+            pass_side = 0
+
+        target_speed = clamp(base_speed, 0.0, effective_cap) * traffic_mode_speed_bias(traffic_mode)
+        steering = clamp(base_steer, -MAX_STEERING_RAD, MAX_STEERING_RAD)
+        if confidence > OPPONENT_CONFIDENCE_MIN and front_min < follow_distance_m:
+            slow_factor = clamp(front_min / max(follow_distance_m, 0.2), 0.30, 1.0)
+            target_speed *= slow_factor
+            steering += DEFAULT_STEERING_BIAS_GAIN * float(side)
+            steering = clamp(steering, -MAX_STEERING_RAD, MAX_STEERING_RAD)
+        else:
+            target_speed = min(target_speed, effective_cap)
+
+        target_speed = compute_ttc_limited_speed(
+            front_dist=front_min,
+            desired_speed=target_speed,
+            target_ttc_sec=DEFAULT_TACTICAL_TARGET_TTC_SEC,
+        )
+        target_speed, steering = apply_rule_guards(
+            speed_m_s=target_speed,
+            steering_rad=steering,
+            front_dist=front_min,
+            left_clear=left_clear,
+            right_clear=right_clear,
+            max_speed_m_s=effective_cap,
+        )
 
         # Wrong-direction detection → U-turn trigger
         if (
@@ -1302,7 +1771,7 @@ def run_controller():
         else:
             wrong_order_counter = max(0, wrong_order_counter - 2)
 
-        front_dist = front_clearance(ranges)
+        front_dist = front_min
         steering = stabilize_steering_command(steering, prev_steering, front_dist)
         prev_steering = steering
 
@@ -1373,6 +1842,11 @@ def run_controller():
                     f"uturn_cnt={wrong_order_counter}/{UTURN_TRIGGER_FRAMES} "
                     f"cam_lock={int(camera_state.get('lane_locked', False))} "
                     f"cam_depth={camera_state.get('depth_sample_count', 0)} "
+                    f"opp={confidence:.2f} "
+                    f"nw={near_weight:.2f} "
+                    f"side={side:+d} "
+                    f"far_w={reactive_debug.get('far_weight', 0.0):.2f} "
+                    f"gap_fb={int(bool(reactive_debug.get('gap_fallback_used', False)))} "
                     f"imu={'Y' if vehicle_state else 'N'}"
                     + (
                         f" yr={vehicle_state.yaw_rate:+.2f}r/s"
