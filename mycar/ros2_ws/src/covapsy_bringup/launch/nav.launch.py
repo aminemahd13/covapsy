@@ -27,6 +27,23 @@ def generate_launch_description():
             DeclareLaunchArgument("runtime_log_stale_timeout_s", default_value="1.5"),
             DeclareLaunchArgument("enable_track_learning", default_value="false"),
             DeclareLaunchArgument("enable_depth_obstacle", default_value="false"),
+            DeclareLaunchArgument("enable_border_detect", default_value="false"),
+            DeclareLaunchArgument("use_close_far_fusion", default_value="true"),
+            DeclareLaunchArgument("reactive_far_center_gain", default_value="0.35"),
+            DeclareLaunchArgument("reactive_camera_center_gain", default_value="0.25"),
+            DeclareLaunchArgument("reactive_far_weight_min", default_value="0.10"),
+            DeclareLaunchArgument("reactive_far_weight_max", default_value="0.55"),
+            DeclareLaunchArgument("reactive_fusion_clearance_ref_m", default_value="1.8"),
+            DeclareLaunchArgument("tactical_near_weight_base", default_value="0.35"),
+            DeclareLaunchArgument("tactical_near_weight_min", default_value="0.20"),
+            DeclareLaunchArgument("tactical_near_weight_max", default_value="0.90"),
+            DeclareLaunchArgument("tactical_near_weight_clear_ref_dist", default_value="1.8"),
+            DeclareLaunchArgument("tactical_near_weight_traffic_boost", default_value="0.35"),
+            DeclareLaunchArgument("tactical_near_weight_clearance_boost", default_value="0.30"),
+            DeclareLaunchArgument(
+                "tactical_near_weight_steer_disagreement_boost",
+                default_value="0.20",
+            ),
             # Scan filter
             Node(
                 package="covapsy_perception",
@@ -62,6 +79,14 @@ def generate_launch_description():
                         "ttc_target_sec": 1.2,
                         "use_ai_speed": True,
                         "use_imu_fusion": True,
+                        "use_close_far_fusion": LaunchConfiguration("use_close_far_fusion"),
+                        "far_center_gain": LaunchConfiguration("reactive_far_center_gain"),
+                        "camera_center_gain": LaunchConfiguration("reactive_camera_center_gain"),
+                        "far_weight_min": LaunchConfiguration("reactive_far_weight_min"),
+                        "far_weight_max": LaunchConfiguration("reactive_far_weight_max"),
+                        "fusion_clearance_ref_m": LaunchConfiguration(
+                            "reactive_fusion_clearance_ref_m"
+                        ),
                     }
                 ],
                 output="screen",
@@ -91,6 +116,13 @@ def generate_launch_description():
             ),
             Node(
                 package="covapsy_perception",
+                executable="border_detect_node",
+                name="border_detect",
+                condition=IfCondition(LaunchConfiguration("enable_border_detect")),
+                output="screen",
+            ),
+            Node(
+                package="covapsy_perception",
                 executable="opponent_detect_node",
                 name="opponent_detect",
                 condition=IfCondition(LaunchConfiguration("enable_tactical_ai")),
@@ -115,6 +147,21 @@ def generate_launch_description():
                         "max_speed_sim_cap": LaunchConfiguration("max_speed_sim_cap"),
                         "traffic_mode": LaunchConfiguration("traffic_mode"),
                         "enable_predictive_tracking": True,
+                        "near_weight_base": LaunchConfiguration("tactical_near_weight_base"),
+                        "near_weight_min": LaunchConfiguration("tactical_near_weight_min"),
+                        "near_weight_max": LaunchConfiguration("tactical_near_weight_max"),
+                        "near_weight_clear_ref_dist": LaunchConfiguration(
+                            "tactical_near_weight_clear_ref_dist"
+                        ),
+                        "near_weight_traffic_boost": LaunchConfiguration(
+                            "tactical_near_weight_traffic_boost"
+                        ),
+                        "near_weight_clearance_boost": LaunchConfiguration(
+                            "tactical_near_weight_clearance_boost"
+                        ),
+                        "near_weight_steer_disagreement_boost": LaunchConfiguration(
+                            "tactical_near_weight_steer_disagreement_boost"
+                        ),
                     }
                 ],
                 output="screen",

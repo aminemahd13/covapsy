@@ -30,6 +30,11 @@ _GAP_SCORE_HEADING_WEIGHT = 0.30
 _GAP_EDGE_PENALTY = 0.14
 _SPEED_LOOKAHEAD_WINDOW_DEG = 20.0
 _SPEED_TTC_WINDOW_DEG = 12.0
+_SIDE_CLEAR_MIN_DEG = 22.0
+_SIDE_CLEAR_MAX_DEG = 75.0
+_FUSION_CLEARANCE_WEIGHT = 0.45
+_FUSION_TTC_WEIGHT = 0.35
+_FUSION_STABILITY_WEIGHT = 0.20
 
 # Forward-direction safety: prevent wall collisions
 _EMERGENCY_WALL_DIST_M = 0.30
@@ -41,6 +46,10 @@ _GAP_REACH_MULTIPLIER = 2.8
 # Module-level state for curvature smoothing across calls
 _prev_curvature: float = 0.0
 _prev_speed: float = 0.0
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, float(value)))
 
 
 def _find_free_gaps(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -87,6 +96,65 @@ def _choose_best_gap(
     return max(gaps, key=score)
 
 
+def _side_clearances(
+    f_ranges: np.ndarray,
+    f_angles: np.ndarray,
+    fallback: float,
+) -> tuple[float, float]:
+    min_rad = math.radians(_SIDE_CLEAR_MIN_DEG)
+    max_rad = math.radians(_SIDE_CLEAR_MAX_DEG)
+
+    left_mask = (f_angles >= min_rad) & (f_angles <= max_rad)
+    right_mask = (f_angles <= -min_rad) & (f_angles >= -max_rad)
+
+    left_clear = float(np.median(f_ranges[left_mask])) if np.any(left_mask) else float(fallback)
+    right_clear = float(np.median(f_ranges[right_mask])) if np.any(right_mask) else float(fallback)
+    return left_clear, right_clear
+
+
+def _compute_far_center_steering(
+    f_ranges: np.ndarray,
+    f_angles: np.ndarray,
+    max_steering: float,
+    far_center_gain: float,
+    camera_center_gain: float,
+    camera_offset: float,
+    fusion_clearance_ref_m: float,
+    fallback_range: float,
+) -> float:
+    left_clear, right_clear = _side_clearances(f_ranges=f_ranges, f_angles=f_angles, fallback=fallback_range)
+    clearance_ref = max(float(fusion_clearance_ref_m), 0.1)
+    lateral_balance = _clamp((left_clear - right_clear) / clearance_ref, -1.0, 1.0)
+    lidar_center = float(far_center_gain) * lateral_balance
+    camera_center = float(camera_center_gain) * _clamp(camera_offset, -1.0, 1.0)
+    return _clamp(lidar_center + camera_center, -max_steering, max_steering)
+
+
+def _compute_close_far_blend_weight(
+    forward_clearance: float,
+    ttc_proxy: float,
+    turn_urgency: float,
+    far_weight_min: float,
+    far_weight_max: float,
+    fusion_clearance_ref_m: float,
+    ttc_target_sec: float,
+) -> float:
+    lo = _clamp(far_weight_min, 0.0, 1.0)
+    hi = _clamp(far_weight_max, 0.0, 1.0)
+    if lo > hi:
+        lo, hi = hi, lo
+
+    clearance_score = _clamp(forward_clearance / max(fusion_clearance_ref_m, 0.1), 0.0, 1.0)
+    ttc_score = _clamp(ttc_proxy / max(ttc_target_sec, 0.2), 0.0, 1.0)
+    stability_score = 1.0 - _clamp(turn_urgency, 0.0, 1.0)
+    openness = (
+        _FUSION_CLEARANCE_WEIGHT * clearance_score
+        + _FUSION_TTC_WEIGHT * ttc_score
+        + _FUSION_STABILITY_WEIGHT * stability_score
+    )
+    return lo + (hi - lo) * openness
+
+
 def _forward_clearance_for_heading(
     f_ranges: np.ndarray,
     f_angles: np.ndarray,
@@ -120,6 +188,13 @@ def compute_gap_command(
     use_ai_speed: bool = True,
     depth_front_dist: float = float("inf"),
     vehicle_state: Optional["VehicleState"] = None,
+    camera_offset: float = 0.0,
+    use_close_far_fusion: bool = True,
+    far_center_gain: float = 0.35,
+    camera_center_gain: float = 0.25,
+    far_weight_min: float = 0.10,
+    far_weight_max: float = 0.55,
+    fusion_clearance_ref_m: float = 1.8,
 ) -> tuple[float, float]:
     """Compute (speed_m_s, steering_rad) from filtered scan data.
 
@@ -252,17 +327,44 @@ def compute_gap_command(
         fallback=nearest_dist,
     )
 
+    close_steering = effective_gain * target_angle
+    close_steering = _clamp(close_steering, -max_steering, max_steering)
+
+    desired_steering = close_steering
+    if use_close_far_fusion:
+        far_steering = _compute_far_center_steering(
+            f_ranges=reference_ranges,
+            f_angles=f_angles,
+            max_steering=max_steering,
+            far_center_gain=far_center_gain,
+            camera_center_gain=camera_center_gain,
+            camera_offset=camera_offset,
+            fusion_clearance_ref_m=fusion_clearance_ref_m,
+            fallback_range=nearest_dist,
+        )
+        ttc_proxy = actual_forward_clearance / max(abs(_prev_speed), min_speed * 0.8, 0.05)
+        turn_urgency = abs(close_steering) / max(max_steering, 1e-6)
+        far_weight = _compute_close_far_blend_weight(
+            forward_clearance=actual_forward_clearance,
+            ttc_proxy=ttc_proxy,
+            turn_urgency=turn_urgency,
+            far_weight_min=far_weight_min,
+            far_weight_max=far_weight_max,
+            fusion_clearance_ref_m=fusion_clearance_ref_m,
+            ttc_target_sec=ttc_target_sec,
+        )
+        desired_steering = (1.0 - far_weight) * close_steering + far_weight * far_steering
+        desired_steering = _clamp(desired_steering, -max_steering, max_steering)
+
     # Adaptive slew rate: faster steering when wall is close ahead
     effective_slew = steering_slew_rate
     if actual_forward_clearance < _SLEW_URGENCY_DIST_M:
         urgency = 1.0 - actual_forward_clearance / _SLEW_URGENCY_DIST_M
         effective_slew = steering_slew_rate * (1.0 + _SLEW_URGENCY_BOOST * urgency)
 
-    raw_steering = effective_gain * target_angle
-    raw_steering = max(-max_steering, min(max_steering, raw_steering))
     steering = max(
         float(prev_steering) - float(effective_slew),
-        min(float(prev_steering) + float(effective_slew), raw_steering),
+        min(float(prev_steering) + float(effective_slew), desired_steering),
     )
 
     projected_clearance = _forward_clearance_for_heading(

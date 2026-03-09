@@ -1,6 +1,8 @@
 import numpy as np
 
 from covapsy_nav.gap_utils import _choose_best_gap
+from covapsy_nav.gap_utils import _compute_close_far_blend_weight
+from covapsy_nav.gap_utils import _compute_far_center_steering
 from covapsy_nav.gap_utils import compute_gap_command
 
 
@@ -102,3 +104,91 @@ def test_adaptive_slew_rate_near_wall():
     # Forward clearance 0.28m < urgency threshold 0.55m → adaptive boost kicks in
     # Effective slew > base → steering can exceed base_slew from prev_steering=0
     assert abs(steer) > base_slew + 0.001
+
+
+def test_far_center_steering_uses_side_clearance_balance():
+    f_ranges = np.array([0.8, 0.9, 1.0, 1.2, 1.8, 1.9, 2.0], dtype=np.float32)
+    f_angles = np.radians(np.array([-70, -50, -30, 0, 30, 50, 70], dtype=np.float32))
+    steer = _compute_far_center_steering(
+        f_ranges=f_ranges,
+        f_angles=f_angles,
+        max_steering=0.5,
+        far_center_gain=0.4,
+        camera_center_gain=0.0,
+        camera_offset=0.0,
+        fusion_clearance_ref_m=1.2,
+        fallback_range=1.0,
+    )
+    assert steer > 0.0
+
+
+def test_far_center_steering_includes_camera_offset():
+    f_ranges = np.array([1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2], dtype=np.float32)
+    f_angles = np.radians(np.array([-70, -50, -30, 0, 30, 50, 70], dtype=np.float32))
+    steer = _compute_far_center_steering(
+        f_ranges=f_ranges,
+        f_angles=f_angles,
+        max_steering=0.5,
+        far_center_gain=0.0,
+        camera_center_gain=0.4,
+        camera_offset=-0.5,
+        fusion_clearance_ref_m=1.2,
+        fallback_range=1.0,
+    )
+    assert steer < 0.0
+
+
+def test_close_far_blend_weight_prefers_far_when_open():
+    open_weight = _compute_close_far_blend_weight(
+        forward_clearance=2.6,
+        ttc_proxy=3.0,
+        turn_urgency=0.1,
+        far_weight_min=0.10,
+        far_weight_max=0.60,
+        fusion_clearance_ref_m=1.8,
+        ttc_target_sec=1.2,
+    )
+    constrained_weight = _compute_close_far_blend_weight(
+        forward_clearance=0.45,
+        ttc_proxy=0.35,
+        turn_urgency=0.85,
+        far_weight_min=0.10,
+        far_weight_max=0.60,
+        fusion_clearance_ref_m=1.8,
+        ttc_target_sec=1.2,
+    )
+    assert 0.10 <= constrained_weight <= 0.60
+    assert 0.10 <= open_weight <= 0.60
+    assert open_weight > constrained_weight
+
+
+def test_close_strategy_stays_dominant_under_low_clearance():
+    ranges = np.full(360, 3.5, dtype=np.float32)
+    ranges[170:191] = 0.35
+    ranges[205:260] = 0.20
+
+    close_speed, close_steer = compute_gap_command(
+        ranges_in=ranges,
+        use_close_far_fusion=False,
+        camera_offset=1.0,
+        far_center_gain=0.6,
+        camera_center_gain=0.5,
+        **_default_kwargs(),
+    )
+    fused_speed, fused_steer = compute_gap_command(
+        ranges_in=ranges,
+        use_close_far_fusion=True,
+        camera_offset=1.0,
+        far_center_gain=0.6,
+        camera_center_gain=0.5,
+        far_weight_min=0.05,
+        far_weight_max=0.80,
+        fusion_clearance_ref_m=1.8,
+        **_default_kwargs(),
+    )
+
+    assert close_speed >= 0.0
+    assert fused_speed >= 0.0
+    assert close_steer < 0.0
+    assert fused_steer < 0.0
+    assert abs(fused_steer - close_steer) < 0.18

@@ -29,6 +29,7 @@ def generate_launch_description():
             DeclareLaunchArgument("command_topic", default_value="/cmd_vel_autonomy"),
             DeclareLaunchArgument("enable_runtime_logs", default_value="false"),
             DeclareLaunchArgument("runtime_log_period_s", default_value="1.0"),
+            DeclareLaunchArgument("enable_border_detect", default_value="false"),
             Node(
                 package="covapsy_bridge",
                 executable="stm32_bridge_node",
@@ -70,6 +71,7 @@ def generate_launch_description():
                     "enable_runtime_logs": LaunchConfiguration("enable_runtime_logs"),
                     "runtime_log_period_s": LaunchConfiguration("runtime_log_period_s"),
                     "enable_tactical_ai": "false",
+                    "enable_border_detect": LaunchConfiguration("enable_border_detect"),
                 }.items(),
             ),
         ]

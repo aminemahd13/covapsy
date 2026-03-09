@@ -34,14 +34,22 @@ class GapFollowerNode(Node):
         self.declare_parameter("ttc_target_sec", 0.70)
         self.declare_parameter("use_ai_speed", True)
         self.declare_parameter("use_imu_fusion", True)
+        self.declare_parameter("use_close_far_fusion", True)
+        self.declare_parameter("far_center_gain", 0.35)
+        self.declare_parameter("camera_center_gain", 0.25)
+        self.declare_parameter("far_weight_min", 0.10)
+        self.declare_parameter("far_weight_max", 0.55)
+        self.declare_parameter("fusion_clearance_ref_m", 1.8)
 
         self.create_subscription(LaserScan, "/scan_filtered", self.scan_cb, 10)
         self.create_subscription(Float32, "/depth_front_dist", self.depth_cb, 10)
         self.create_subscription(Imu, "/imu/data", self.imu_cb, 20)
         self.create_subscription(Float32, "/wheel_speed", self.wheel_speed_cb, 10)
+        self.create_subscription(Float32, "/camera_steering_offset", self.camera_cb, 20)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel_reactive", 10)
         self.prev_steering = 0.0
         self.depth_front_dist = float("inf")
+        self.camera_offset = 0.0
 
         # Vehicle state estimator (EKF fusing IMU + wheel speed + LiDAR)
         self._state_estimator = VehicleStateEstimator()
@@ -51,6 +59,9 @@ class GapFollowerNode(Node):
 
     def depth_cb(self, msg: Float32):
         self.depth_front_dist = float(msg.data)
+
+    def camera_cb(self, msg: Float32):
+        self.camera_offset = float(msg.data)
 
     def imu_cb(self, msg: Imu):
         """Fuse IMU data into vehicle state at IMU rate (~100 Hz)."""
@@ -104,6 +115,13 @@ class GapFollowerNode(Node):
             use_ai_speed=bool(self.get_parameter("use_ai_speed").value),
             depth_front_dist=self.depth_front_dist,
             vehicle_state=vehicle_state,
+            camera_offset=self.camera_offset,
+            use_close_far_fusion=bool(self.get_parameter("use_close_far_fusion").value),
+            far_center_gain=float(self.get_parameter("far_center_gain").value),
+            camera_center_gain=float(self.get_parameter("camera_center_gain").value),
+            far_weight_min=float(self.get_parameter("far_weight_min").value),
+            far_weight_max=float(self.get_parameter("far_weight_max").value),
+            fusion_clearance_ref_m=float(self.get_parameter("fusion_clearance_ref_m").value),
         )
         self.prev_steering = steering
 

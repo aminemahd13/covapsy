@@ -20,7 +20,9 @@ from std_msgs.msg import Float32
 from covapsy_nav.race_profiles import resolve_profile_speed_cap
 from covapsy_nav.tactical_utils import (
     apply_rule_guards,
+    blend_near_far_command,
     clamp,
+    compute_near_horizon_weight,
     compute_ttc_limited_speed,
     fused_opponent_confidence,
     select_passing_side,
@@ -57,6 +59,13 @@ class TacticalRaceNode(Node):
         self.declare_parameter("pass_lock_sec", 0.65)
         self.declare_parameter("steering_bias_gain", 0.18)
         self.declare_parameter("enable_predictive_tracking", True)
+        self.declare_parameter("near_weight_base", 0.35)
+        self.declare_parameter("near_weight_min", 0.20)
+        self.declare_parameter("near_weight_max", 0.90)
+        self.declare_parameter("near_weight_clear_ref_dist", 1.8)
+        self.declare_parameter("near_weight_traffic_boost", 0.35)
+        self.declare_parameter("near_weight_clearance_boost", 0.30)
+        self.declare_parameter("near_weight_steer_disagreement_boost", 0.20)
 
         self.reactive_cmd = Twist()
         self.pursuit_cmd = Twist()
@@ -109,11 +118,47 @@ class TacticalRaceNode(Node):
     def opp_count_cb(self, msg: Float32):
         self.opponent_count = max(0.0, float(msg.data))
 
-    def _base_command(self) -> tuple[float, float]:
-        pursuit_speed = float(self.pursuit_cmd.linear.x)
-        if pursuit_speed > 0.05:
-            return pursuit_speed, float(self.pursuit_cmd.angular.z)
-        return float(self.reactive_cmd.linear.x), float(self.reactive_cmd.angular.z)
+    def _blended_base_command(
+        self,
+        front_min: float,
+        confidence: float,
+        max_steering: float,
+    ) -> tuple[float, float]:
+        near_speed = float(self.reactive_cmd.linear.x)
+        near_steer = float(self.reactive_cmd.angular.z)
+        far_speed = float(self.pursuit_cmd.linear.x)
+        far_steer = float(self.pursuit_cmd.angular.z)
+        far_valid = (
+            math.isfinite(far_speed)
+            and math.isfinite(far_steer)
+            and far_speed > 0.05
+        )
+        if not far_valid:
+            return near_speed, near_steer
+
+        near_weight = compute_near_horizon_weight(
+            base_weight=float(self.get_parameter("near_weight_base").value),
+            front_dist=front_min,
+            clear_ref_dist=float(self.get_parameter("near_weight_clear_ref_dist").value),
+            opponent_confidence=confidence,
+            traffic_boost=float(self.get_parameter("near_weight_traffic_boost").value),
+            clearance_boost=float(self.get_parameter("near_weight_clearance_boost").value),
+            steer_disagreement_boost=float(
+                self.get_parameter("near_weight_steer_disagreement_boost").value
+            ),
+            near_steer=near_steer,
+            far_steer=far_steer,
+            max_steering=max_steering,
+            weight_min=float(self.get_parameter("near_weight_min").value),
+            weight_max=float(self.get_parameter("near_weight_max").value),
+        )
+        return blend_near_far_command(
+            near_speed=near_speed,
+            near_steer=near_steer,
+            far_speed=far_speed,
+            far_steer=far_steer,
+            near_weight=near_weight,
+        )
 
     def _scan_metrics(self) -> tuple[float, float, float, float]:
         """Return (front_min, left_clear, right_clear, lidar_confidence)."""
@@ -144,7 +189,6 @@ class TacticalRaceNode(Node):
         return front_min, left_clear, right_clear, lidar_conf
 
     def control_loop(self):
-        base_speed, base_steer = self._base_command()
         profile_cap = resolve_profile_speed_cap(
             race_profile=str(self.get_parameter("race_profile").value),
             deployment_mode=str(self.get_parameter("deployment_mode").value),
@@ -171,6 +215,11 @@ class TacticalRaceNode(Node):
                 camera_weight=float(self.get_parameter("camera_weight").value),
             ),
             self.external_opp_conf,
+        )
+        base_speed, base_steer = self._blended_base_command(
+            front_min=front_min,
+            confidence=confidence,
+            max_steering=max_steering,
         )
 
         now = time.monotonic()
