@@ -17,13 +17,13 @@ from covapsy_nav.racing_intelligence import (
     extract_sector_ranges,
 )
 
-_NEAREST_HEADING_PENALTY = 0.45
-_ANGLE_PENALTY_PER_RAD = 0.22
-_GAP_SCORE_WIDTH_WEIGHT = 0.45
-_GAP_SCORE_CLEARANCE_WEIGHT = 0.45
-_GAP_SCORE_HEADING_WEIGHT = 0.10
-_GAP_EDGE_PENALTY = 0.22
-_SPEED_LOOKAHEAD_WINDOW_DEG = 14.0
+_NEAREST_HEADING_PENALTY = 0.30
+_ANGLE_PENALTY_PER_RAD = 0.14
+_GAP_SCORE_WIDTH_WEIGHT = 0.40
+_GAP_SCORE_CLEARANCE_WEIGHT = 0.40
+_GAP_SCORE_HEADING_WEIGHT = 0.20
+_GAP_EDGE_PENALTY = 0.14
+_SPEED_LOOKAHEAD_WINDOW_DEG = 16.0
 _SPEED_TTC_WINDOW_DEG = 8.0
 
 # Module-level state for curvature smoothing across calls
@@ -261,6 +261,8 @@ def compute_gap_command(
             sector_ranges=sector_ranges,
             ttc_clearance=projected_ttc_clearance,
             ttc_target_sec=ttc_target_sec,
+            speed_ramp_up=0.35,
+            speed_ramp_down=0.25,
         )
     else:
         # Classic heuristic fallback

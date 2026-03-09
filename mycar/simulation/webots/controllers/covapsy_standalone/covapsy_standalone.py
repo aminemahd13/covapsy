@@ -66,13 +66,13 @@ CAR_WIDTH_M = 0.30
 MAX_LIDAR_RANGE_M = 5.0
 MIN_VALID_RANGE_M = 0.05
 FRONT_FOV_DEG = 150
-GAP_SELECTION_FOV_DEG = 105
+GAP_SELECTION_FOV_DEG = 120
 
 # Controller tuning
 DISPARITY_THRESHOLD_M = 0.38
-SAFETY_RADIUS_M = 0.20
-MIN_SPEED_FLOOR_M_S = 0.16
-BASE_MIN_SPEED_M_S = 0.32
+SAFETY_RADIUS_M = 0.18
+MIN_SPEED_FLOOR_M_S = 0.18
+BASE_MIN_SPEED_M_S = 0.36
 RACE_PROFILE_SPEED_CAPS = {
     "HOMOLOGATION": 0.8,
     "RACE_STABLE": 2.5,
@@ -81,8 +81,8 @@ RACE_PROFILE_SPEED_CAPS = {
 DEFAULT_RACE_PROFILE = "RACE_AGGRESSIVE"
 DEFAULT_MAX_SPEED_M_S = RACE_PROFILE_SPEED_CAPS[DEFAULT_RACE_PROFILE]
 MAX_SPEED_LIMIT_M_S = RACE_PROFILE_SPEED_CAPS["RACE_AGGRESSIVE"]
-SPEED_RAMP_UP_M_S = 0.14
-SPEED_RAMP_DOWN_M_S = 0.12
+SPEED_RAMP_UP_M_S = 0.22
+SPEED_RAMP_DOWN_M_S = 0.18
 REVERSE_SPEED_M_S = -0.60
 REVERSE_STEPS = 28
 EMERGENCY_STUCK_STEPS = 6
@@ -92,26 +92,26 @@ EMERGENCY_MIN_BLOCK_HITS = 3
 LIDAR_MEDIAN_FILTER_RADIUS = 2
 
 # Stability knobs
-ANGLE_PENALTY_PER_RAD = 0.18
-WRONG_SIDE_DAMPING = 0.30
-CLEARANCE_DIFF_THRESHOLD_M = 0.18
+ANGLE_PENALTY_PER_RAD = 0.12
+WRONG_SIDE_DAMPING = 0.55
+CLEARANCE_DIFF_THRESHOLD_M = 0.22
 SIDE_CLEAR_MIN_DEG = 22
 SIDE_CLEAR_MAX_DEG = 85
-STEERING_RATE_LIMIT_RAD = math.radians(4.5)
-STEERING_LOW_PASS_ALPHA = 0.75
+STEERING_RATE_LIMIT_RAD = math.radians(7.5)
+STEERING_LOW_PASS_ALPHA = 0.88
 REVERSE_STEERING_MAX_RAD = math.radians(13.0)
-GAP_SCORE_WIDTH_WEIGHT = 0.40
-GAP_SCORE_CLEARANCE_WEIGHT = 0.45
-GAP_SCORE_HEADING_WEIGHT = 0.20
-GAP_EDGE_PENALTY = 0.22
-SPEED_LOOKAHEAD_WINDOW_DEG = 14
+GAP_SCORE_WIDTH_WEIGHT = 0.35
+GAP_SCORE_CLEARANCE_WEIGHT = 0.40
+GAP_SCORE_HEADING_WEIGHT = 0.25
+GAP_EDGE_PENALTY = 0.14
+SPEED_LOOKAHEAD_WINDOW_DEG = 16
 SPEED_TTC_WINDOW_DEG = 8
-SPEED_TARGET_TTC_SEC = 1.05
+SPEED_TARGET_TTC_SEC = 0.80
 
 # Cornering and anti-stall knobs
-CORNER_TRIGGER_DIST_M = 0.80
-CORNER_BIAS_MAX_RAD = math.radians(7.0)
-CORNER_CLEARANCE_REF_M = 0.9
+CORNER_TRIGGER_DIST_M = 0.70
+CORNER_BIAS_MAX_RAD = math.radians(5.0)
+CORNER_CLEARANCE_REF_M = 1.0
 NO_PROGRESS_SPEED_CMD_M_S = 0.28
 NO_PROGRESS_SPEED_ACTUAL_M_S = 0.05
 NO_PROGRESS_FRONT_DIST_M = 0.50
@@ -121,8 +121,8 @@ EARLY_STALL_TRIGGER_STEPS = 10
 
 # Curvature-aware speed control
 CURVATURE_LOOKAHEAD_HALF_DEG = 40
-CURVATURE_SPEED_REDUCTION_FACTOR = 0.35
-CURVATURE_TRIGGER_RATIO = 0.50
+CURVATURE_SPEED_REDUCTION_FACTOR = 0.25
+CURVATURE_TRIGGER_RATIO = 0.55
 
 # Escalating recovery
 RECOVERY_ESCALATION_WINDOW_STEPS = 150  # ~5 seconds at 32ms
@@ -388,7 +388,7 @@ def apply_turn_direction_sanity(steering_rad, front_ranges, front_angles):
 
 def adaptive_min_speed(nearest_dist, steering_rad):
     distance_factor = clamp(nearest_dist / 1.0, 0.0, 1.0)
-    turn_factor = 1.0 - 0.6 * clamp(abs(steering_rad) / MAX_STEERING_RAD, 0.0, 1.0)
+    turn_factor = 1.0 - 0.35 * clamp(abs(steering_rad) / MAX_STEERING_RAD, 0.0, 1.0)
     min_speed = MIN_SPEED_FLOOR_M_S + (BASE_MIN_SPEED_M_S - MIN_SPEED_FLOOR_M_S) * distance_factor * turn_factor
     return clamp(min_speed, MIN_SPEED_FLOOR_M_S, BASE_MIN_SPEED_M_S)
 
@@ -706,7 +706,7 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
     effective_safety_radius = adaptive_safety_radius(reference_ranges, front_angles)
     nearest_idx = min(
         range(len(reference_ranges)),
-        key=lambda idx: reference_ranges[idx] + 0.45 * abs(front_angles[idx]),
+        key=lambda idx: reference_ranges[idx] + 0.30 * abs(front_angles[idx]),
     )
     nearest_dist = reference_ranges[nearest_idx]
     if nearest_dist < MAX_LIDAR_RANGE_M:
@@ -766,6 +766,7 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
     steering_factor = 1.0 - 0.45 * turn_ratio
     clearance_factor = clamp((projected_clearance - 0.08) / 1.2, 0.0, 1.0)
 
+    left_clear, right_clear = side_clearances(reference_ranges, front_angles)
     adaptive_floor = adaptive_min_speed(projected_clearance, steering_rad)
     if projected_clearance < 0.45 and turn_ratio > 0.55:
         adaptive_floor = max(adaptive_floor, 0.22)
@@ -781,7 +782,7 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
             steering_rad=steering_rad,
             max_steering=MAX_STEERING_RAD,
             projected_clearance=projected_clearance,
-            passage_width=projected_clearance * 2.0,
+            passage_width=left_clear + right_clear,
             curvature=curvature,
             prev_speed=_ai_prev_speed,
             sector_ranges=sectors,

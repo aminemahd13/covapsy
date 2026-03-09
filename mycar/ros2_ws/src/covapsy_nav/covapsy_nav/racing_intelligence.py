@@ -21,27 +21,27 @@ _NUM_SECTORS = 12
 _SECTOR_HALF_FOV_DEG = 90.0  # analyse ±90° in front
 
 # Curvature estimation
-_CURVATURE_SMOOTHING = 0.55  # EMA alpha — lower = smoother/more stable signal
+_CURVATURE_SMOOTHING = 0.35  # EMA alpha — lower = faster response to track changes
 _MIN_AVG_RANGE = 0.10
 
-# Speed profiles — wider bands so fewer scans are classified as "tight"
-_STRAIGHT_THRESHOLD = 0.15        # curvature below this = straight
-_GENTLE_CURVE_THRESHOLD = 0.45    # curvature below this = gentle curve
-_TIGHT_CURVE_THRESHOLD = 0.72     # above this = tight curve
+# Speed profiles — wide bands: only truly tight corners slow down
+_STRAIGHT_THRESHOLD = 0.22        # curvature below this = straight
+_GENTLE_CURVE_THRESHOLD = 0.55    # curvature below this = gentle curve
+_TIGHT_CURVE_THRESHOLD = 0.82     # above this = tight curve
 
-# Speed factors per section type — much less aggressive reduction in turns
+# Speed factors per section type — keep speed high through turns
 _SPEED_FACTOR_STRAIGHT = 1.00
-_SPEED_FACTOR_GENTLE = 0.92
-_SPEED_FACTOR_TIGHT = 0.72
-_SPEED_FACTOR_CHICANE = 0.58
+_SPEED_FACTOR_GENTLE = 0.96
+_SPEED_FACTOR_TIGHT = 0.82
+_SPEED_FACTOR_CHICANE = 0.70
 
 # Predictive braking
 _BRAKE_LOOKAHEAD_SECTORS = 3     # how many sectors ahead to check
-_BRAKE_ANTICIPATION = 0.22       # lighter pre-braking (was 0.35)
+_BRAKE_ANTICIPATION = 0.14       # light pre-braking — trust the section factor
 
 # Acceleration boost
-_ACCEL_BOOST_FACTOR = 1.20       # speed multiplier on exits of corners
-_ACCEL_BOOST_MIN_CLEARANCE = 1.2 # metres ahead needed to boost (was 1.5)
+_ACCEL_BOOST_FACTOR = 1.30       # speed multiplier on exits of corners
+_ACCEL_BOOST_MIN_CLEARANCE = 0.9 # metres ahead needed to boost
 
 # Passage width adaptive margin
 _NARROW_PASSAGE_M = 0.60
@@ -199,9 +199,9 @@ def compute_optimal_speed(
     prev_speed: float,
     sector_ranges: List[float],
     ttc_clearance: float,
-    ttc_target_sec: float = 1.0,
-    speed_ramp_up: float = 0.22,
-    speed_ramp_down: float = 0.16,
+    ttc_target_sec: float = 0.70,
+    speed_ramp_up: float = 0.35,
+    speed_ramp_down: float = 0.25,
 ) -> float:
     """Compute AI-optimised speed combining multiple factors.
 
@@ -210,19 +210,19 @@ def compute_optimal_speed(
     section = classify_section(curvature)
     base_factor = section_speed_factor(section)
 
-    # Steering penalty — mild, the section factor already handles most of it
+    # Steering penalty — very mild, the section factor already handles turn severity
     steer_ratio = _clamp(abs(steering_rad) / max(max_steering, 1e-6), 0.0, 1.0)
-    steer_penalty = 1.0 - 0.35 * steer_ratio  # light touch — curvature does the heavy lifting
+    steer_penalty = 1.0 - 0.18 * steer_ratio  # minimal — curvature does the heavy lifting
 
-    # Clearance factor — ramp to 1.0 faster so open track ≈ full speed
-    clearance_factor = _clamp((projected_clearance - 0.08) / 1.3, 0.0, 1.0)
+    # Clearance factor — ramp to 1.0 quickly so open track ≈ full speed
+    clearance_factor = _clamp((projected_clearance - 0.06) / 0.9, 0.0, 1.0)
 
     # Passage width factor — be bolder in wide passages
     width_factor = _clamp(
         (passage_width - _NARROW_PASSAGE_M) / (_WIDE_PASSAGE_M - _NARROW_PASSAGE_M),
         0.0, 1.0,
     )
-    width_boost = 1.0 + 0.18 * width_factor  # up to 18% faster in wide sections
+    width_boost = 1.0 + 0.22 * width_factor  # up to 22% faster in wide sections
 
     # Predictive braking
     brake_factor = predictive_brake_factor(sector_ranges, curvature)
@@ -241,11 +241,11 @@ def compute_optimal_speed(
     raw_speed *= width_boost * brake_factor * accel_boost
     raw_speed = _clamp(raw_speed, min_speed, max_speed)
 
-    # TTC guard
-    if raw_speed > 0.05:
-        ttc = ttc_clearance / max(raw_speed, 0.05)
-        if ttc < max(ttc_target_sec, 0.2):
-            raw_speed = min(raw_speed, ttc_clearance / max(ttc_target_sec, 0.2))
+    # TTC guard — only intervene when collision is truly imminent
+    if raw_speed > 0.10:
+        ttc = ttc_clearance / max(raw_speed, 0.10)
+        if ttc < max(ttc_target_sec, 0.15):
+            raw_speed = min(raw_speed, ttc_clearance / max(ttc_target_sec, 0.15))
 
     # Ensure minimum creep when space available
     if projected_clearance > 0.35:
