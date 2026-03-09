@@ -39,6 +39,8 @@ def generate_launch_description():
             DeclareLaunchArgument("max_speed_sim_cap", default_value="2.5"),
             DeclareLaunchArgument("watchdog_timeout", default_value="0.25"),
             DeclareLaunchArgument("command_topic", default_value="/cmd_vel_autonomy"),
+            DeclareLaunchArgument("enable_runtime_logs", default_value="false"),
+            DeclareLaunchArgument("runtime_log_period_s", default_value="1.0"),
             Node(
                 package="covapsy_bridge",
                 executable="stm32_bridge_node",
@@ -84,6 +86,8 @@ def generate_launch_description():
                     "command_topic": LaunchConfiguration("command_topic"),
                     "allow_runtime_mode_switch": "false",
                     "enable_pure_pursuit": "true",
+                    "enable_runtime_logs": LaunchConfiguration("enable_runtime_logs"),
+                    "runtime_log_period_s": LaunchConfiguration("runtime_log_period_s"),
                 }.items(),
             ),
             Node(

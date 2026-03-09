@@ -54,6 +54,10 @@ For each backend (`spi`, `uart`, `pi_pwm`):
 ```bash
 ros2 launch covapsy_bringup car_safe.launch.py backend:=<backend>
 ```
+Optional: enable runtime logs at startup:
+```bash
+ros2 launch covapsy_bringup car_safe.launch.py backend:=<backend> enable_runtime_logs:=true runtime_log_period_s:=1.0
+```
 3. Arm run (required in competition mode):
 ```bash
 ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
@@ -70,6 +74,11 @@ ros2 topic pub /race_stop std_msgs/msg/Bool "{data: true}" --once
 7. Check status topic:
 ```bash
 ros2 topic echo /mcu_status --once
+```
+8. Toggle logs during run (without restart):
+```bash
+ros2 param set /runtime_monitor enable_logs true
+ros2 param set /runtime_monitor enable_logs false
 ```
 
 Pass criteria:

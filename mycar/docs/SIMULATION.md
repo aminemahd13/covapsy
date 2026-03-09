@@ -12,6 +12,12 @@ This mode runs everything inside Webots with a pure Python controller.
 powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1
 ```
 
+Enable standalone runtime logs from launch:
+```powershell
+$env:COVAPSY_STANDALONE_LOGS=1
+powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1
+```
+
 If Webots is not in the default location:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1 -WebotsExe "C:\Path\To\webotsw.exe"
@@ -35,6 +41,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_webots_standalone.ps1 -We
 - `S`: toggle advanced gap follower / simple baseline
 - `R`: short reverse maneuver
 - `+` / `-`: increase or decrease speed cap
+- `L`: toggle runtime logs on/off
 
 ## Mode B: ROS2-In-The-Loop (Ubuntu)
 Use this mode when validating ROS2 topics and launch files.
@@ -55,6 +62,11 @@ source install/setup.bash
 ### 2. Start ROS2 autonomy stack
 ```bash
 ros2 launch covapsy_bringup sim_webots.launch.py
+```
+
+Enable runtime logs directly from launch:
+```bash
+ros2 launch covapsy_bringup sim_webots.launch.py enable_runtime_logs:=true runtime_log_period_s:=1.0
 ```
 
 Default behavior:
@@ -102,6 +114,12 @@ webots mycar/simulation/webots/worlds/Piste_CoVAPSy_2025a_multicar_ros2.wbt
 ros2 topic hz /cmd_vel_tactical
 ros2 topic echo /opponent_confidence --once
 ros2 topic echo /traffic_state --once
+```
+
+Toggle runtime logs during run:
+```bash
+ros2 param set /runtime_monitor enable_logs true
+ros2 param set /runtime_monitor enable_logs false
 ```
 
 Expected:

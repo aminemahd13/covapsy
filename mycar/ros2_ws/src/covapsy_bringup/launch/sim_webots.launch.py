@@ -21,6 +21,8 @@ def generate_launch_description():
             DeclareLaunchArgument("max_speed_real_cap", default_value="2.0"),
             DeclareLaunchArgument("max_speed_sim_cap", default_value="2.5"),
             DeclareLaunchArgument("initial_mode", default_value="REACTIVE"),
+            DeclareLaunchArgument("enable_runtime_logs", default_value="false"),
+            DeclareLaunchArgument("runtime_log_period_s", default_value="1.0"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(bringup_dir, "launch", "nav.launch.py")
@@ -35,6 +37,8 @@ def generate_launch_description():
                     "traffic_mode": LaunchConfiguration("traffic_mode"),
                     "initial_mode": LaunchConfiguration("initial_mode"),
                     "enable_pure_pursuit": "false",
+                    "enable_runtime_logs": LaunchConfiguration("enable_runtime_logs"),
+                    "runtime_log_period_s": LaunchConfiguration("runtime_log_period_s"),
                 }.items(),
             ),
             Node(

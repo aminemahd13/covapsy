@@ -6,9 +6,11 @@ Keyboard controls:
   S: switch algorithm (advanced gap follower / simple baseline)
   R: trigger short reverse maneuver
   + / -: increase or decrease speed cap
+  L: toggle runtime debug logs
 """
 
 import math
+import os
 
 try:
     from controller import Camera, Lidar, RangeFinder
@@ -25,6 +27,13 @@ except Exception:
 
 def clamp(value, lower, upper):
     return max(lower, min(upper, value))
+
+
+def env_flag(name, default=False):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
 # Car / sensor constants
@@ -90,6 +99,10 @@ CAMERA_DEPTH_MAX_VALID_M = 6.0
 CAMERA_ORDER_MIN_SEPARATION_PX = 24
 CAMERA_WRONG_ORDER_SPEED_CAP_M_S = 0.45
 CAMERA_WRONG_ORDER_CONFIDENCE = 0.60
+
+# Runtime logging controls
+STANDALONE_LOG_EVERY_STEPS = 8
+STANDALONE_LOG_ENV = "COVAPSY_STANDALONE_LOGS"
 
 
 def set_drive_command(driver, steering_rad, speed_m_s):
@@ -508,6 +521,10 @@ def nearest_front_obstacle(ranges, half_window_deg=45):
     return nearest_dist, nearest_angle
 
 
+def front_clearance(ranges, half_window_deg=12):
+    return min(ranges[deg % 360] for deg in range(-half_window_deg, half_window_deg + 1))
+
+
 def compute_reverse_steering(ranges):
     nearest_dist, nearest_angle = nearest_front_obstacle(ranges, half_window_deg=45)
     if nearest_dist >= (MAX_LIDAR_RANGE_M * 0.95):
@@ -575,12 +592,18 @@ def run_controller():
     smoothed_speed = 0.0
     prev_steering = 0.0
     last_ranges = [MAX_LIDAR_RANGE_M] * 360
+    logs_enabled = env_flag(STANDALONE_LOG_ENV, default=False)
+    log_counter = 0
 
     print("=" * 64)
     print("COVAPSY Standalone Webots Controller")
     print("No ROS required. Click the 3D window then use:")
-    print("  A=start  N=stop  S=algo toggle  R=reverse  +/- speed cap")
+    print("  A=start  N=stop  S=algo toggle  R=reverse  +/- speed cap  L=logs")
     print(f"Active speed profile: {DEFAULT_RACE_PROFILE} (cap={speed_cap:.2f} m/s)")
+    print(
+        f"Runtime logs: {'ON' if logs_enabled else 'OFF'} "
+        f"(toggle with L or env {STANDALONE_LOG_ENV}=1)"
+    )
     if rgb_camera is not None:
         print(f"Camera guidance: RGB sensor enabled ({rgb_camera_name})")
     else:
@@ -631,6 +654,9 @@ def run_controller():
             elif key in (ord("-"), ord("_")):
                 speed_cap = max(MIN_SPEED_FLOOR_M_S, speed_cap - 0.1)
                 print(f"[standalone] speed_cap={speed_cap:.2f} m/s")
+            elif key in (ord("L"), ord("l")):
+                logs_enabled = not logs_enabled
+                print(f"[standalone] runtime logs {'ON' if logs_enabled else 'OFF'}")
 
         if not auto_mode:
             continue
@@ -679,6 +705,22 @@ def run_controller():
             smoothed_speed = min(target_speed, smoothed_speed + SPEED_RAMP_UP_M_S)
         else:
             smoothed_speed = max(target_speed, smoothed_speed - SPEED_RAMP_DOWN_M_S)
+
+        if logs_enabled:
+            log_counter += 1
+            if log_counter % STANDALONE_LOG_EVERY_STEPS == 0:
+                front_dist = front_clearance(ranges)
+                print(
+                    "[standalone][log] "
+                    f"mode={'ADV' if use_advanced else 'BASE'} "
+                    f"spd={smoothed_speed:.2f}/{target_speed:.2f}m/s "
+                    f"cap={speed_cap:.2f} "
+                    f"steer={math.degrees(steering):+.1f}deg "
+                    f"front={front_dist:.2f}m "
+                    f"cam_conf={camera_state['confidence']:.2f} "
+                    f"cam_wrong={int(camera_state['wrong_order'])} "
+                    f"cam_order={camera_state['order_confidence']:.2f}"
+                )
 
         set_drive_command(driver, steering, smoothed_speed)
 

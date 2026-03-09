@@ -9,7 +9,8 @@ Core runtime chain:
 3. Optional `/racing_path` + `/odom` -> `pure_pursuit_node` -> `/cmd_vel_pursuit`
 4. `/scan_filtered` + `/odom` + planner commands -> `tactical_race_node` -> `/cmd_vel_tactical`
 5. `mode_controller_node` selects final command on configurable `command_topic`
-6. Real car: `/cmd_vel_autonomy` -> `stm32_bridge_node`; simulation: `/cmd_vel` -> Webots bridge
+6. `runtime_monitor_node` subscribes to mode/cmd/status topics and emits periodic diagnostics when enabled
+7. Real car: `/cmd_vel_autonomy` -> `stm32_bridge_node`; simulation: `/cmd_vel` -> Webots bridge
 
 ## Topic Contract
 | Topic | Type | Producer | Consumer |

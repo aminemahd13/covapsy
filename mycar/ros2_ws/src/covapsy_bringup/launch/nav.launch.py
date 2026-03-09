@@ -22,6 +22,9 @@ def generate_launch_description():
             DeclareLaunchArgument("command_topic", default_value="/cmd_vel"),
             DeclareLaunchArgument("allow_runtime_mode_switch", default_value="false"),
             DeclareLaunchArgument("enable_pure_pursuit", default_value="true"),
+            DeclareLaunchArgument("enable_runtime_logs", default_value="false"),
+            DeclareLaunchArgument("runtime_log_period_s", default_value="1.0"),
+            DeclareLaunchArgument("runtime_log_stale_timeout_s", default_value="1.5"),
             # Scan filter
             Node(
                 package="covapsy_perception",
@@ -128,6 +131,20 @@ def generate_launch_description():
                         "enable_tactical_ai": LaunchConfiguration("enable_tactical_ai"),
                         "tactical_timeout": 0.25,
                         "lock_mode_after_start": True,
+                    }
+                ],
+                output="screen",
+            ),
+            Node(
+                package="covapsy_nav",
+                executable="runtime_monitor_node",
+                name="runtime_monitor",
+                parameters=[
+                    {
+                        "enable_logs": LaunchConfiguration("enable_runtime_logs"),
+                        "log_period_s": LaunchConfiguration("runtime_log_period_s"),
+                        "stale_timeout_s": LaunchConfiguration("runtime_log_stale_timeout_s"),
+                        "command_topic": LaunchConfiguration("command_topic"),
                     }
                 ],
                 output="screen",
