@@ -74,6 +74,13 @@ SIDE_CLEAR_MAX_DEG = 85
 STEERING_RATE_LIMIT_RAD = math.radians(2.2)
 STEERING_LOW_PASS_ALPHA = 0.72
 REVERSE_STEERING_MAX_RAD = math.radians(13.0)
+GAP_SCORE_WIDTH_WEIGHT = 0.45
+GAP_SCORE_CLEARANCE_WEIGHT = 0.45
+GAP_SCORE_HEADING_WEIGHT = 0.10
+GAP_EDGE_PENALTY = 0.22
+SPEED_LOOKAHEAD_WINDOW_DEG = 14
+SPEED_TTC_WINDOW_DEG = 8
+SPEED_TARGET_TTC_SEC = 1.15
 
 # Cornering and anti-stall knobs
 CORNER_TRIGGER_DIST_M = 0.65
@@ -206,6 +213,57 @@ def find_largest_gap(mask):
             best = candidate
 
     return best
+
+
+def find_free_gaps(mask):
+    """Return all contiguous traversable segments as (start, end)."""
+    gaps = []
+    start = None
+
+    for i, valid in enumerate(mask):
+        if valid and start is None:
+            start = i
+        elif not valid and start is not None:
+            gaps.append((start, i - 1))
+            start = None
+
+    if start is not None:
+        gaps.append((start, len(mask) - 1))
+    return gaps
+
+
+def choose_best_gap(front_ranges, front_angles, gaps):
+    """Score gaps by width + clearance and keep a mild forward-heading bias."""
+    if not gaps:
+        return None
+
+    total = max(len(front_ranges), 1)
+    max_heading = math.radians(FRONT_FOV_DEG)
+
+    def score(gap):
+        start, end = gap
+        width = (end - start + 1) / float(total)
+        section = front_ranges[start : end + 1]
+        clearance = clamp(median_or_default(section, 0.0) / MAX_LIDAR_RANGE_M, 0.0, 1.0)
+        center_idx = (start + end) // 2
+        heading = 1.0 - clamp(abs(front_angles[center_idx]) / max(max_heading, 1e-6), 0.0, 1.0)
+        return (
+            GAP_SCORE_WIDTH_WEIGHT * width
+            + GAP_SCORE_CLEARANCE_WEIGHT * clearance
+            + GAP_SCORE_HEADING_WEIGHT * heading
+        )
+
+    return max(gaps, key=score)
+
+
+def forward_clearance_for_heading(front_ranges, front_angles, heading_rad, half_window_deg):
+    """Nearest obstacle distance around the current steering heading."""
+    half_window_rad = math.radians(half_window_deg)
+    nearest = MAX_LIDAR_RANGE_M
+    for dist, ang in zip(front_ranges, front_angles):
+        if abs(ang - heading_rad) <= half_window_rad:
+            nearest = min(nearest, dist)
+    return nearest
 
 
 def median_or_default(values, default):
@@ -468,8 +526,11 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
                     front_ranges[j] = min(front_ranges[j], closer_range)
 
     # 2) Safety bubble around nearest obstacle
-    nearest_idx = min(range(len(front_ranges)), key=front_ranges.__getitem__)
-    nearest_dist = front_ranges[nearest_idx]
+    nearest_idx = min(
+        range(len(reference_ranges)),
+        key=lambda idx: reference_ranges[idx] + 0.45 * abs(front_angles[idx]),
+    )
+    nearest_dist = reference_ranges[nearest_idx]
     if nearest_dist < MAX_LIDAR_RANGE_M:
         nearest_angle = front_angles[nearest_idx]
         arc_scale = max(nearest_dist, MIN_VALID_RANGE_M)
@@ -478,35 +539,57 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
             if arc_dist < SAFETY_RADIUS_M:
                 front_ranges[i] = 0.0
 
-    # 3) Largest free gap
+    # 3) Best free gap (width + clearance score)
     traversable = [r > MIN_VALID_RANGE_M for r in front_ranges]
-    best_gap = find_largest_gap(traversable)
+    free_gaps = find_free_gaps(traversable)
+    best_gap = choose_best_gap(front_ranges, front_angles, free_gaps)
     if best_gap is None:
         return 0.0, 0.0
 
-    # 4) Best point in largest gap with center bias.
+    # 4) Best point in selected gap with center and heading bias.
     gap_start, gap_end = best_gap
+    gap_center = 0.5 * (gap_start + gap_end)
+    gap_half_span = max(0.5 * (gap_end - gap_start + 1), 1.0)
     best_local = max(
         range(gap_start, gap_end + 1),
-        key=lambda idx: front_ranges[idx] - ANGLE_PENALTY_PER_RAD * abs(front_angles[idx]),
+        key=lambda idx: (
+            front_ranges[idx]
+            - ANGLE_PENALTY_PER_RAD * abs(front_angles[idx])
+            - GAP_EDGE_PENALTY * abs((idx - gap_center) / gap_half_span)
+        ),
     )
     target_angle = front_angles[best_local]
-    corner_bias = compute_corner_bias(reference_ranges, front_angles, nearest_dist)
+    forward_center_dist = forward_clearance_for_heading(reference_ranges, front_angles, 0.0, 12)
+    corner_bias = compute_corner_bias(reference_ranges, front_angles, forward_center_dist)
 
     # 5) Steering + speed adaptation
     steering_rad = clamp(target_angle + corner_bias, -MAX_STEERING_RAD, MAX_STEERING_RAD)
     steering_rad = apply_turn_direction_sanity(steering_rad, reference_ranges, front_angles)
+    projected_clearance = forward_clearance_for_heading(
+        reference_ranges,
+        front_angles,
+        steering_rad,
+        SPEED_LOOKAHEAD_WINDOW_DEG,
+    )
+    projected_ttc_clearance = forward_clearance_for_heading(
+        reference_ranges,
+        front_angles,
+        steering_rad,
+        SPEED_TTC_WINDOW_DEG,
+    )
 
     turn_ratio = clamp(abs(steering_rad) / MAX_STEERING_RAD, 0.0, 1.0)
     steering_factor = 1.0 - 0.88 * turn_ratio
-    clearance_factor = clamp((nearest_dist - 0.10) / 1.2, 0.0, 1.0)
+    clearance_factor = clamp((projected_clearance - 0.14) / 1.35, 0.0, 1.0)
 
-    adaptive_floor = adaptive_min_speed(nearest_dist, steering_rad)
-    if nearest_dist < 0.45 and turn_ratio > 0.55:
+    adaptive_floor = adaptive_min_speed(projected_clearance, steering_rad)
+    if projected_clearance < 0.45 and turn_ratio > 0.55:
         adaptive_floor = max(adaptive_floor, 0.22)
     cap = max(adaptive_floor, speed_cap_m_s)
     speed_m_s = adaptive_floor + (cap - adaptive_floor) * steering_factor * clearance_factor
     speed_m_s = clamp(speed_m_s, adaptive_floor, cap)
+    ttc_speed_cap = projected_ttc_clearance / max(SPEED_TARGET_TTC_SEC, 0.1)
+    speed_m_s = min(speed_m_s, max(0.0, ttc_speed_cap))
     return steering_rad, speed_m_s
 
 

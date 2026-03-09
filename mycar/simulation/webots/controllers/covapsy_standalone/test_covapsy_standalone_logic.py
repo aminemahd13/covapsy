@@ -103,3 +103,38 @@ def test_sudden_side_swap_is_rate_limited():
 
     assert abs(cmd_2 - cmd_1) <= covapsy_standalone.STEERING_RATE_LIMIT_RAD + 1e-12
     assert cmd_1 * cmd_2 >= 0.0
+
+
+def test_close_side_wall_keeps_reasonable_speed_when_forward_is_clear():
+    ranges = make_ranges(3.8)
+    set_sector(ranges, 82, 112, 0.12)
+
+    _steering, speed = covapsy_standalone.advanced_gap_follower(
+        ranges,
+        covapsy_standalone.DEFAULT_MAX_SPEED_M_S,
+    )
+
+    assert speed >= 0.5
+
+
+def test_gap_selection_prefers_clearer_gap_over_only_wider_gap():
+    front_ranges = [0.8] * 7 + [2.2] * 5
+    front_angles = [
+        -0.60,
+        -0.50,
+        -0.40,
+        -0.30,
+        -0.20,
+        -0.10,
+        -0.05,
+        0.05,
+        0.10,
+        0.20,
+        0.30,
+        0.40,
+    ]
+    gaps = [(0, 6), (7, 11)]
+
+    chosen = covapsy_standalone.choose_best_gap(front_ranges, front_angles, gaps)
+
+    assert chosen == (7, 11)
