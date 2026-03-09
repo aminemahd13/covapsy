@@ -1,5 +1,6 @@
 import numpy as np
 
+from covapsy_nav.gap_utils import _choose_best_gap
 from covapsy_nav.gap_utils import compute_gap_command
 
 
@@ -42,3 +43,23 @@ def test_gap_command_applies_steering_slew_limit():
     )
     assert 0.0 <= speed <= 2.0
     assert abs(steering) <= 0.03 + 1e-9
+
+
+def test_gap_command_avoids_side_wall_speed_collapse():
+    ranges = np.full(360, 3.8, dtype=np.float32)
+    # Close obstacle on side should not force crawl speed if projected heading is clear.
+    ranges[82:113] = 0.12
+    speed, _steering = compute_gap_command(ranges_in=ranges, **_default_kwargs())
+    assert speed >= 0.5
+
+
+def test_gap_command_prefers_clearer_gap_direction():
+    f_ranges = np.array([0.8] * 7 + [2.2] * 5, dtype=np.float32)
+    f_angles = np.array(
+        [-0.60, -0.50, -0.40, -0.30, -0.20, -0.10, -0.05, 0.05, 0.10, 0.20, 0.30, 0.40],
+        dtype=np.float32,
+    )
+    gaps = [(0, 6), (7, 11)]
+
+    best = _choose_best_gap(f_ranges=f_ranges, f_angles=f_angles, gaps=gaps, max_range=5.0)
+    assert best == (7, 11)

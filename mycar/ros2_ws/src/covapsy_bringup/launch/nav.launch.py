@@ -48,7 +48,7 @@ def generate_launch_description():
                     {
                         "car_width": 0.30,
                         "max_speed": LaunchConfiguration("max_speed"),
-                        "min_speed": 0.5,
+                        "min_speed": 0.35,
                         "safety_radius": LaunchConfiguration("safety_radius"),
                         "disparity_threshold": 0.5,
                         "steering_gain": 1.0,
@@ -71,14 +71,16 @@ def generate_launch_description():
                 parameters=[
                     {
                         "wheelbase": 0.257,
-                        "lookahead_min": 0.5,
-                        "lookahead_max": 1.5,
-                        "max_speed": 2.5,
+                        "lookahead_min": 0.6,
+                        "lookahead_max": 1.8,
+                        "max_speed": LaunchConfiguration("max_speed"),
                         "race_profile": LaunchConfiguration("race_profile"),
                         "deployment_mode": LaunchConfiguration("deployment_mode"),
                         "max_speed_real_cap": LaunchConfiguration("max_speed_real_cap"),
                         "max_speed_sim_cap": LaunchConfiguration("max_speed_sim_cap"),
-                        "ttc_target_sec": 1.3,
+                        "steering_slew_rate": 0.06,
+                        "scan_front_half_angle_deg": 20.0,
+                        "ttc_target_sec": 1.2,
                     }
                 ],
                 output="screen",

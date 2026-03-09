@@ -18,6 +18,9 @@ from sensor_msgs.msg import LaserScan
 import numpy as np
 
 from covapsy_nav.race_profiles import resolve_profile_speed_cap
+from covapsy_nav.pure_pursuit_utils import find_lookahead_index
+from covapsy_nav.pure_pursuit_utils import front_min_distance
+from covapsy_nav.pure_pursuit_utils import path_is_looped
 
 try:
     import tf_transformations
@@ -43,6 +46,7 @@ class PurePursuitNode(Node):
         self.declare_parameter('deployment_mode', 'real')
         self.declare_parameter('max_speed_real_cap', 2.0)
         self.declare_parameter('max_speed_sim_cap', 2.5)
+        self.declare_parameter('scan_front_half_angle_deg', 20.0)
 
         self.path_sub = self.create_subscription(
             Path, '/racing_path', self.path_cb, 10)
@@ -77,13 +81,13 @@ class PurePursuitNode(Node):
         self.current_pose = msg.pose.pose
 
     def scan_cb(self, msg: LaserScan):
-        ranges = np.array(msg.ranges, dtype=np.float32)
-        if ranges.size == 0:
-            return
-        ranges = ranges[np.isfinite(ranges)]
-        if ranges.size == 0:
-            return
-        self.min_front_dist = float(np.min(ranges))
+        half_angle = float(self.get_parameter('scan_front_half_angle_deg').value)
+        self.min_front_dist = front_min_distance(
+            ranges_in=msg.ranges,
+            angle_min=float(msg.angle_min),
+            angle_increment=float(msg.angle_increment),
+            half_angle_deg=half_angle,
+        )
 
     def control_loop(self):
         if self.path is None or self.current_pose is None or len(self.path) < 2:
@@ -119,20 +123,14 @@ class PurePursuitNode(Node):
         dists = np.hypot(path_arr[:, 0] - px, path_arr[:, 1] - py)
         nearest_idx = int(np.argmin(dists))
 
-        # Find lookahead point
-        target = None
-        for i in range(nearest_idx, len(self.path)):
-            if dists[i] >= ld:
-                target = self.path[i]
-                break
-        # Wrap around for looped paths
-        if target is None:
-            for i in range(0, nearest_idx):
-                if dists[i] >= ld:
-                    target = self.path[i]
-                    break
-        if target is None:
-            target = self.path[-1]
+        looped_path = path_is_looped(self.path, closure_tol=max(0.4, float(ld_min)))
+        target_idx = find_lookahead_index(
+            path=self.path,
+            start_idx=nearest_idx,
+            lookahead_dist=float(ld),
+            looped=looped_path,
+        )
+        target = self.path[target_idx]
 
         # Transform to vehicle frame
         dx = target[0] - px

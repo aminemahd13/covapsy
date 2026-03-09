@@ -15,11 +15,11 @@ def generate_launch_description():
     bringup_dir = get_package_share_directory("covapsy_bringup")
     return LaunchDescription(
         [
-            DeclareLaunchArgument("max_speed", default_value="3.2"),
-            DeclareLaunchArgument("race_profile", default_value="RACE_AGGRESSIVE"),
+            DeclareLaunchArgument("max_speed", default_value="2.6"),
+            DeclareLaunchArgument("race_profile", default_value="RACE_STABLE"),
             DeclareLaunchArgument("traffic_mode", default_value="balanced"),
             DeclareLaunchArgument("max_speed_real_cap", default_value="2.0"),
-            DeclareLaunchArgument("max_speed_sim_cap", default_value="3.2"),
+            DeclareLaunchArgument("max_speed_sim_cap", default_value="2.8"),
             DeclareLaunchArgument("initial_mode", default_value="REACTIVE"),
             DeclareLaunchArgument("enable_runtime_logs", default_value="false"),
             DeclareLaunchArgument("runtime_log_period_s", default_value="1.0"),
