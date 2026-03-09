@@ -39,6 +39,15 @@ _VALID_MODES = ('IDLE', 'REACTIVE', 'MAPPING', 'RACING', 'LEARNING', 'STOPPED')
 _EMERGENCY_STOP_DIST = 0.15
 _PHASE_DURATIONS = (0.20, 0.10)  # phase 0 (brake), phase 1 (neutral) in seconds
 
+# U-turn parameters
+_UTURN_TRIGGER_COUNT = 25    # consecutive wrong-direction ticks at 50 Hz (~0.5 s)
+_UTURN_BRAKE_DURATION = 0.3  # seconds
+_UTURN_REVERSE_DURATION = 1.2
+_UTURN_FORWARD_DURATION = 0.8
+_UTURN_REVERSE_SPEED = -0.45
+_UTURN_FORWARD_SPEED = 0.45
+_UTURN_STEER = 0.5  # rad — full lock
+
 
 class ModeControllerNode(Node):
 
@@ -78,6 +87,7 @@ class ModeControllerNode(Node):
         self.create_subscription(String, '/set_mode', self.set_mode_cb, 10)
         self.create_subscription(Bool, '/track_learned', self.track_learned_cb, 10)
         self.create_subscription(Bool, '/depth_obstacle', self.depth_obstacle_cb, 10)
+        self.create_subscription(Bool, '/wrong_direction', self.wrong_direction_cb, 10)
 
         # Publishers
         self.cmd_pub = self.create_publisher(Twist, self.command_topic, 10)
@@ -104,6 +114,14 @@ class ModeControllerNode(Node):
         self.last_loop_time: float = 0.0
         self.recovery_count = 0
         self.recovery_steer_sign = 1.0
+
+        # U-turn (wrong-direction recovery)
+        self.wrong_direction = False
+        self.wrong_dir_counter = 0
+        self.is_uturn = False
+        self.uturn_phase = 0        # 0=not active, 1=brake, 2=reverse, 3=forward
+        self.uturn_phase_start = 0.0
+        self.uturn_steer_sign = 1.0
 
         # Control loop at 50 Hz
         self.create_timer(0.02, self.control_loop)
@@ -181,6 +199,9 @@ class ModeControllerNode(Node):
     def depth_obstacle_cb(self, msg: Bool):
         self.depth_obstacle = bool(msg.data)
 
+    def wrong_direction_cb(self, msg: Bool):
+        self.wrong_direction = bool(msg.data)
+
     def set_mode(self, new_mode: str, from_external: bool = False):
         """Externally set mode (e.g., from a service or parameter change)."""
         if from_external:
@@ -206,7 +227,9 @@ class ModeControllerNode(Node):
         dt = now - self.last_loop_time if self.last_loop_time > 0.0 else 0.02
         self.last_loop_time = now
 
-        if self.is_reversing:
+        if self.is_uturn:
+            selected = self._run_uturn(now)
+        elif self.is_reversing:
             selected = self._run_reverse(now, dt)
         else:
             selected = self._run_normal(now)
@@ -217,7 +240,12 @@ class ModeControllerNode(Node):
         self.cmd_pub.publish(cmd)
 
         mode_msg = String()
-        mode_msg.data = self.mode if not self.is_reversing else 'REVERSING'
+        if self.is_uturn:
+            mode_msg.data = 'UTURN'
+        elif self.is_reversing:
+            mode_msg.data = 'REVERSING'
+        else:
+            mode_msg.data = self.mode
         self.mode_pub.publish(mode_msg)
 
     def _run_normal(self, now: float) -> DriveCommand:
@@ -256,6 +284,15 @@ class ModeControllerNode(Node):
             if self.stopped_since > 0.0:
                 self.stopped_since = 0.0
                 self.recovery_count = 0
+
+        # Wrong-direction detection → U-turn trigger
+        if self.mode in _ACTIVE_MODES and self.wrong_direction:
+            self.wrong_dir_counter += 1
+            if self.wrong_dir_counter >= _UTURN_TRIGGER_COUNT:
+                self._start_uturn(now)
+                return DriveCommand()
+        else:
+            self.wrong_dir_counter = max(0, self.wrong_dir_counter - 2)
 
         return selected
 
@@ -312,12 +349,72 @@ class ModeControllerNode(Node):
         )
         self._reset_recovery()
 
+    # ---- U-turn (wrong direction recovery) ----
+
+    def _start_uturn(self, now: float):
+        self.is_uturn = True
+        self.uturn_phase = 1  # brake
+        self.uturn_phase_start = now
+        # Alternate steer direction each U-turn for robustness
+        self.uturn_steer_sign *= -1.0
+        self.get_logger().info(
+            f'U-turn triggered (wrong direction for '
+            f'{self.wrong_dir_counter} ticks, steer_sign={self.uturn_steer_sign:+.0f})'
+        )
+
+    def _run_uturn(self, now: float) -> DriveCommand:
+        elapsed = now - self.uturn_phase_start
+
+        if self.uturn_phase == 1:
+            # Phase 1: brake
+            if elapsed >= _UTURN_BRAKE_DURATION:
+                self.uturn_phase = 2
+                self.uturn_phase_start = now
+                self.get_logger().info('U-turn phase 2: reverse with full lock')
+            return DriveCommand()
+
+        if self.uturn_phase == 2:
+            # Phase 2: reverse with full lock steering
+            if elapsed >= _UTURN_REVERSE_DURATION:
+                self.uturn_phase = 3
+                self.uturn_phase_start = now
+                self.get_logger().info('U-turn phase 3: forward to complete turn')
+            return DriveCommand(
+                linear_x=_UTURN_REVERSE_SPEED,
+                angular_z=_UTURN_STEER * self.uturn_steer_sign,
+            )
+
+        if self.uturn_phase == 3:
+            # Phase 3: forward with full lock to finish turn
+            if elapsed >= _UTURN_FORWARD_DURATION:
+                self._end_uturn()
+                return DriveCommand()
+            return DriveCommand(
+                linear_x=_UTURN_FORWARD_SPEED,
+                angular_z=_UTURN_STEER * self.uturn_steer_sign,
+            )
+
+        # Shouldn't happen, but graceful fallback
+        self._end_uturn()
+        return DriveCommand()
+
+    def _end_uturn(self):
+        self.get_logger().info('U-turn complete, resuming normal driving')
+        self.is_uturn = False
+        self.uturn_phase = 0
+        self.uturn_phase_start = 0.0
+        self.wrong_dir_counter = 0
+
     def _reset_recovery(self):
         self.is_reversing = False
         self.reverse_phase = 0
         self.reverse_phase_start = 0.0
         self.reverse_distance = 0.0
         self.stopped_since = 0.0
+        self.is_uturn = False
+        self.uturn_phase = 0
+        self.uturn_phase_start = 0.0
+        self.wrong_dir_counter = 0
 
 
 def main(args=None):

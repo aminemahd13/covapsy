@@ -158,6 +158,16 @@ CAMERA_DEPTH_PERCENTILE = 0.20
 CAMERA_SINGLE_BORDER_CONFIDENCE_CAP = 0.45
 CAMERA_SINGLE_BORDER_BLEND_SCALE = 0.55
 
+# U-turn (wrong-direction recovery)
+UTURN_TRIGGER_FRAMES = 15         # consecutive wrong-order frames to trigger (~0.5 s)
+UTURN_CONFIDENCE_THRESHOLD = 0.65 # min order_confidence to count frame
+UTURN_BRAKE_STEPS = 8             # phase 1: brake to stop
+UTURN_REVERSE_STEPS = 35          # phase 2: reverse with max steering
+UTURN_FORWARD_STEPS = 25          # phase 3: forward with max steering to complete turn
+UTURN_REVERSE_SPEED_M_S = -0.65   # reverse speed during U-turn
+UTURN_FORWARD_SPEED_M_S = 0.60    # forward speed during turn completion
+UTURN_STEER_RAD = MAX_STEERING_RAD  # full lock steering during U-turn
+
 # Sensor-fusion env toggles
 CAMERA_GUIDANCE_ENV = "COVAPSY_USE_CAMERA_GUIDANCE"
 DEPTH_GUIDANCE_ENV = "COVAPSY_USE_DEPTH_GUIDANCE"
@@ -926,6 +936,10 @@ def run_controller():
     smoothed_speed = 0.0
     prev_steering = 0.0
     last_ranges = [MAX_LIDAR_RANGE_M] * 360
+    wrong_order_counter = 0
+    uturn_phase = 0        # 0=inactive, 1=brake, 2=reverse+steer, 3=forward+steer
+    uturn_ticks = 0
+    uturn_steer_sign = 1.0  # +1 or -1: which direction to steer during U-turn
     logs_enabled = env_flag(STANDALONE_LOG_ENV, default=False)
     log_counter = 0
 
@@ -980,6 +994,9 @@ def run_controller():
                 last_recovery_direction = 0
                 smoothed_speed = 0.0
                 prev_steering = 0.0
+                wrong_order_counter = 0
+                uturn_phase = 0
+                uturn_ticks = 0
                 print("[standalone] auto mode ON")
             elif key in (ord("N"), ord("n")):
                 auto_mode = False
@@ -989,6 +1006,9 @@ def run_controller():
                 low_speed_stall_counter = 0
                 smoothed_speed = 0.0
                 prev_steering = 0.0
+                wrong_order_counter = 0
+                uturn_phase = 0
+                uturn_ticks = 0
                 set_drive_command(driver, 0.0, 0.0)
                 print("[standalone] auto mode OFF")
             elif key in (ord("S"), ord("s")):
@@ -1024,6 +1044,39 @@ def run_controller():
             low_speed_stall_counter = 0
             prev_steering = reverse_steering
             set_drive_command(driver, reverse_steering, reverse_speed_current)
+            continue
+
+        # ---- U-turn maneuver execution ----
+        if uturn_phase > 0:
+            uturn_ticks -= 1
+            if uturn_phase == 1:
+                # Phase 1: brake to stop
+                set_drive_command(driver, 0.0, 0.0)
+                if uturn_ticks <= 0:
+                    uturn_phase = 2
+                    uturn_ticks = UTURN_REVERSE_STEPS
+                    print("[standalone] U-turn phase 2: reverse with full lock")
+            elif uturn_phase == 2:
+                # Phase 2: reverse with full lock steering
+                steer = UTURN_STEER_RAD * uturn_steer_sign
+                prev_steering = steer
+                set_drive_command(driver, steer, UTURN_REVERSE_SPEED_M_S)
+                if uturn_ticks <= 0:
+                    uturn_phase = 3
+                    uturn_ticks = UTURN_FORWARD_STEPS
+                    print("[standalone] U-turn phase 3: forward to complete turn")
+            elif uturn_phase == 3:
+                # Phase 3: forward with full lock to finish turning
+                steer = UTURN_STEER_RAD * uturn_steer_sign
+                prev_steering = steer
+                set_drive_command(driver, steer, UTURN_FORWARD_SPEED_M_S)
+                if uturn_ticks <= 0:
+                    uturn_phase = 0
+                    wrong_order_counter = 0
+                    smoothed_speed = UTURN_FORWARD_SPEED_M_S
+                    print("[standalone] U-turn complete, resuming normal driving")
+            no_progress_counter = 0
+            low_speed_stall_counter = 0
             continue
 
         if emergency_front_blocked(ranges):
@@ -1072,11 +1125,33 @@ def run_controller():
 
         camera_state = extract_camera_guidance(rgb_camera, depth_camera)
         steering = blend_lidar_and_camera_steering(steering, camera_state)
+
+        # Wrong-direction detection → U-turn trigger
         if (
             camera_state["wrong_order"]
-            and camera_state["order_confidence"] > CAMERA_WRONG_ORDER_CONFIDENCE
+            and camera_state["order_confidence"] > UTURN_CONFIDENCE_THRESHOLD
         ):
+            wrong_order_counter += 1
+            # Slow down while evaluating
             target_speed = min(target_speed, CAMERA_WRONG_ORDER_SPEED_CAP_M_S)
+            if wrong_order_counter >= UTURN_TRIGGER_FRAMES:
+                # Determine steer direction: pick the side with more open space
+                left_clear = sum(ranges[i] for i in range(0, 90)) / 90.0
+                right_clear = sum(ranges[i] for i in range(270, 360)) / 90.0
+                uturn_steer_sign = 1.0 if left_clear >= right_clear else -1.0
+                uturn_phase = 1
+                uturn_ticks = UTURN_BRAKE_STEPS
+                smoothed_speed = 0.0
+                print(
+                    f"[standalone] U-turn triggered! "
+                    f"(wrong_order for {wrong_order_counter} frames, "
+                    f"confidence={camera_state['order_confidence']:.2f}, "
+                    f"steer_sign={uturn_steer_sign:+.0f})"
+                )
+                set_drive_command(driver, 0.0, 0.0)
+                continue
+        else:
+            wrong_order_counter = max(0, wrong_order_counter - 2)
 
         steering = stabilize_steering_command(steering, prev_steering)
         prev_steering = steering
@@ -1143,6 +1218,7 @@ def run_controller():
                     f"cam_conf={camera_state['confidence']:.2f} "
                     f"cam_wrong={int(camera_state['wrong_order'])} "
                     f"cam_order={camera_state['order_confidence']:.2f} "
+                    f"uturn_cnt={wrong_order_counter}/{UTURN_TRIGGER_FRAMES} "
                     f"cam_lock={int(camera_state.get('lane_locked', False))} "
                     f"cam_depth={camera_state.get('depth_sample_count', 0)}"
                 )

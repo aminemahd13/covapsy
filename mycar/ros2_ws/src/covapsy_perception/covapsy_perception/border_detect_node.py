@@ -12,7 +12,7 @@ COVAPSY border colors:
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, Bool
 import numpy as np
 
 try:
@@ -39,6 +39,11 @@ class BorderDetectNode(Node):
             Image, '/camera/camera/color/image_raw', self.image_cb, 5)
         self.pub = self.create_publisher(
             Float32, '/camera_steering_offset', 10)
+        self.wrong_dir_pub = self.create_publisher(
+            Bool, '/wrong_direction', 10)
+
+        # Expected border order: red on left, green on right (COVAPSY standard)
+        self.expected_red_on_left = True
 
         # HSV ranges for COVAPSY border colors (indoor fluorescent lighting)
         # GREEN (RAL 6037)
@@ -88,6 +93,19 @@ class BorderDetectNode(Node):
         msg_out = Float32()
         msg_out.data = float(offset)
         self.pub.publish(msg_out)
+
+        # Wrong-direction detection: if both borders are visible,
+        # check that red is on the expected side (left).
+        wrong_direction = False
+        if green_cx is not None and red_cx is not None:
+            separation = abs(green_cx - red_cx)
+            if separation > roi_w * 0.05:  # meaningful separation
+                red_is_left = red_cx < green_cx
+                wrong_direction = (red_is_left != self.expected_red_on_left)
+
+        wrong_msg = Bool()
+        wrong_msg.data = wrong_direction
+        self.wrong_dir_pub.publish(wrong_msg)
 
     @staticmethod
     def _centroid_x(mask):
