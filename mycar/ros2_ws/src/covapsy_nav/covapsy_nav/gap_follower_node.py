@@ -4,13 +4,14 @@ import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Float32
 
 from covapsy_nav.gap_utils import compute_gap_command
 from covapsy_nav.race_profiles import resolve_profile_speed_cap
 
 
 class GapFollowerNode(Node):
-    """Reactive follow-the-gap controller with disparity extension."""
+    """Reactive follow-the-gap controller with disparity extension and AI speed."""
 
     def __init__(self):
         super().__init__("gap_follower")
@@ -30,12 +31,18 @@ class GapFollowerNode(Node):
         self.declare_parameter("steering_slew_rate", 0.07)
         self.declare_parameter("max_steering", 0.5)
         self.declare_parameter("ttc_target_sec", 1.2)
+        self.declare_parameter("use_ai_speed", True)
 
         self.create_subscription(LaserScan, "/scan_filtered", self.scan_cb, 10)
+        self.create_subscription(Float32, "/depth_front_dist", self.depth_cb, 10)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel_reactive", 10)
         self.prev_steering = 0.0
+        self.depth_front_dist = float("inf")
 
-        self.get_logger().info("Gap follower node started")
+        self.get_logger().info("Gap follower node started (AI speed enabled)")
+
+    def depth_cb(self, msg: Float32):
+        self.depth_front_dist = float(msg.data)
 
     def scan_cb(self, msg: LaserScan):
         configured_max_speed = float(self.get_parameter("max_speed").value)
@@ -63,6 +70,8 @@ class GapFollowerNode(Node):
             steering_slew_rate=float(self.get_parameter("steering_slew_rate").value),
             max_steering=float(self.get_parameter("max_steering").value),
             ttc_target_sec=float(self.get_parameter("ttc_target_sec").value),
+            use_ai_speed=bool(self.get_parameter("use_ai_speed").value),
+            depth_front_dist=self.depth_front_dist,
         )
         self.prev_steering = steering
 

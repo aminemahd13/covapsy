@@ -13,6 +13,13 @@ from typing import List
 from controller import GPS
 from controller import InertialUnit
 from controller import Lidar
+
+try:
+    from controller import Camera, RangeFinder
+    CAM_AVAILABLE = True
+except Exception:  # pragma: no cover
+    CAM_AVAILABLE = False
+
 from vehicle import Driver
 
 try:
@@ -59,6 +66,80 @@ def _build_scan_ranges(raw_ranges: List[float], max_range: float) -> List[float]
     return out
 
 
+# --------------- camera border detection (compact) ----------------
+_RGB_NAMES = ("RealSenseRGB", "RGB_camera", "camera")
+_DEPTH_NAMES = ("RealSenseDepth", "Depth_camera", "range-finder")
+_ROI_START = 0.58
+_STRIDE = 3
+_MIN_BRIGHT = 36
+_MIN_SAT = 0.22
+_RED_DOM = 1.30
+_GREEN_DOM = 1.25
+_MIN_PX = 80
+_CONF_PX = 850
+_LANE_GAIN = math.radians(12.0)
+_SINGLE_BORDER = math.radians(8.0)
+_MAX_STEER = math.radians(18.0)
+
+
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def _compute_camera_steering(rgb_camera):
+    """Compute a steering offset from red/green border detection."""
+    if not CAM_AVAILABLE or rgb_camera is None:
+        return 0.0, 0.0
+
+    image = rgb_camera.getImage()
+    w = int(rgb_camera.getWidth())
+    h = int(rgb_camera.getHeight())
+    if image is None or w <= 0 or h <= 0:
+        return 0.0, 0.0
+
+    roi_y0 = int(h * _ROI_START)
+    cx = 0.5 * w
+    rc = gc = 0
+    rsx = gsx = 0.0
+
+    for y in range(roi_y0, h, _STRIDE):
+        for x in range(0, w, _STRIDE):
+            r = Camera.imageGetRed(image, w, x, y)
+            g = Camera.imageGetGreen(image, w, x, y)
+            b = Camera.imageGetBlue(image, w, x, y)
+            cmax = max(r, g, b)
+            if cmax < _MIN_BRIGHT:
+                continue
+            cmin = min(r, g, b)
+            if (cmax - cmin) / float(max(cmax, 1)) < _MIN_SAT:
+                continue
+            if r > _RED_DOM * g and r > _RED_DOM * b:
+                rc += 1
+                rsx += x
+            elif g > _GREEN_DOM * r and g > _GREEN_DOM * b:
+                gc += 1
+                gsx += x
+
+    steer = 0.0
+    red_cx = rsx / rc if rc >= _MIN_PX else None
+    green_cx = gsx / gc if gc >= _MIN_PX else None
+    if red_cx is not None and green_cx is not None:
+        lane_c = 0.5 * (red_cx + green_cx)
+        steer = -_LANE_GAIN * (lane_c - cx) / max(cx, 1.0)
+    elif green_cx is not None:
+        steer = _SINGLE_BORDER
+    elif red_cx is not None:
+        steer = -_SINGLE_BORDER
+
+    steer = _clamp(steer, -_MAX_STEER, _MAX_STEER)
+    conf = _clamp((rc + gc) / _CONF_PX, 0.0, 1.0)
+    if red_cx is not None and green_cx is not None:
+        conf = _clamp(conf + 0.25, 0.0, 1.0)
+    else:
+        conf = min(conf, 0.55)
+    return steer, conf
+
+
 class WebotsRosBridge(Node):
     """ROS2 node embedded in a Webots controller process."""
 
@@ -69,12 +150,14 @@ class WebotsRosBridge(Node):
         gps: GPS,
         imu: InertialUnit,
         step_time_s: float,
+        rgb_camera=None,
     ):
         super().__init__("covapsy_webots_bridge")
         self.driver = driver
         self.lidar = lidar
         self.gps = gps
         self.imu = imu
+        self.rgb_camera = rgb_camera
         self.step_time_s = max(float(step_time_s), 1e-3)
 
         self.declare_parameter("max_speed_m_s", 2.5)
@@ -90,6 +173,7 @@ class WebotsRosBridge(Node):
         self.speed_pub = self.create_publisher(Float32, "/wheel_speed", 10)
         self.rear_pub = self.create_publisher(Bool, "/rear_obstacle", 10)
         self.status_pub = self.create_publisher(String, "/mcu_status", 10)
+        self.camera_steer_pub = self.create_publisher(Float32, "/camera_steering_offset", 10)
         self.create_subscription(Twist, "/cmd_vel", self._cmd_cb, 20)
 
         self.last_cmd_time = time.monotonic()
@@ -187,6 +271,12 @@ class WebotsRosBridge(Node):
             self.status_pub.publish(status)
             self.last_status_time = time.monotonic()
 
+        # Camera steering offset (same algorithm as standalone controller)
+        steer_offset, _ = _compute_camera_steering(self.rgb_camera)
+        cam_msg = Float32()
+        cam_msg.data = steer_offset
+        self.camera_steer_pub.publish(cam_msg)
+
 
 def main() -> None:
     driver = Driver()
@@ -203,6 +293,18 @@ def main() -> None:
     imu = InertialUnit("imu")
     imu.enable(sensor_time_step)
 
+    # Try to enable RGB camera for border detection
+    rgb_camera = None
+    if CAM_AVAILABLE:
+        for name in _RGB_NAMES:
+            try:
+                cam = Camera(name)
+                cam.enable(sensor_time_step)
+                rgb_camera = cam
+                break
+            except Exception:
+                continue
+
     if not ROS2_AVAILABLE:  # pragma: no cover
         print("[covapsy_ros2_bridge] ROS2 not available; controller will hold stop.")
         while driver.step() != -1:
@@ -217,6 +319,7 @@ def main() -> None:
         gps=gps,
         imu=imu,
         step_time_s=sensor_time_step / 1000.0,
+        rgb_camera=rgb_camera,
     )
     try:
         while driver.step() != -1:

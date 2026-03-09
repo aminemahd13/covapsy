@@ -31,7 +31,7 @@ def select_mode_command(
 
     if current_mode in ("IDLE", "STOPPED"):
         cmd = DriveCommand()
-    elif current_mode == "MAPPING":
+    elif current_mode in ("MAPPING", "LEARNING"):
         cmd = DriveCommand(
             linear_x=min(float(reactive_cmd.linear_x), float(mapping_speed_cap)),
             angular_z=float(reactive_cmd.angular_z),

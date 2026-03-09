@@ -23,6 +23,8 @@ def generate_launch_description():
             DeclareLaunchArgument("initial_mode", default_value="REACTIVE"),
             DeclareLaunchArgument("enable_runtime_logs", default_value="false"),
             DeclareLaunchArgument("runtime_log_period_s", default_value="1.0"),
+            DeclareLaunchArgument("enable_track_learning", default_value="false"),
+            DeclareLaunchArgument("enable_depth_obstacle", default_value="false"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(bringup_dir, "launch", "nav.launch.py")
@@ -39,6 +41,8 @@ def generate_launch_description():
                     "enable_pure_pursuit": "false",
                     "enable_runtime_logs": LaunchConfiguration("enable_runtime_logs"),
                     "runtime_log_period_s": LaunchConfiguration("runtime_log_period_s"),
+                    "enable_track_learning": LaunchConfiguration("enable_track_learning"),
+                    "enable_depth_obstacle": LaunchConfiguration("enable_depth_obstacle"),
                 }.items(),
             ),
             Node(

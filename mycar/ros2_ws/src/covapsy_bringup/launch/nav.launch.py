@@ -25,6 +25,8 @@ def generate_launch_description():
             DeclareLaunchArgument("enable_runtime_logs", default_value="false"),
             DeclareLaunchArgument("runtime_log_period_s", default_value="1.0"),
             DeclareLaunchArgument("runtime_log_stale_timeout_s", default_value="1.5"),
+            DeclareLaunchArgument("enable_track_learning", default_value="false"),
+            DeclareLaunchArgument("enable_depth_obstacle", default_value="false"),
             # Scan filter
             Node(
                 package="covapsy_perception",
@@ -58,6 +60,7 @@ def generate_launch_description():
                         "max_speed_sim_cap": LaunchConfiguration("max_speed_sim_cap"),
                         "steering_slew_rate": 0.07,
                         "ttc_target_sec": 1.2,
+                        "use_ai_speed": True,
                     }
                 ],
                 output="screen",
@@ -93,6 +96,7 @@ def generate_launch_description():
                 parameters=[
                     {
                         "traffic_mode": LaunchConfiguration("traffic_mode"),
+                        "enable_tracking": True,
                     }
                 ],
                 output="screen",
@@ -109,6 +113,37 @@ def generate_launch_description():
                         "max_speed_real_cap": LaunchConfiguration("max_speed_real_cap"),
                         "max_speed_sim_cap": LaunchConfiguration("max_speed_sim_cap"),
                         "traffic_mode": LaunchConfiguration("traffic_mode"),
+                        "enable_predictive_tracking": True,
+                    }
+                ],
+                output="screen",
+            ),
+            # Track learner (records setup laps and builds racing line)
+            Node(
+                package="covapsy_nav",
+                executable="track_learner_node",
+                name="track_learner",
+                condition=IfCondition(LaunchConfiguration("enable_track_learning")),
+                parameters=[
+                    {
+                        "required_laps": 1,
+                        "closure_tolerance": 0.60,
+                        "smoothing_window": 7,
+                    }
+                ],
+                output="screen",
+            ),
+            # Depth obstacle (RealSense depth for near-field obstacles)
+            Node(
+                package="covapsy_perception",
+                executable="depth_obstacle_node",
+                name="depth_obstacle",
+                condition=IfCondition(LaunchConfiguration("enable_depth_obstacle")),
+                parameters=[
+                    {
+                        "obstacle_threshold_m": 0.35,
+                        "roi_top_frac": 0.30,
+                        "roi_bottom_frac": 0.85,
                     }
                 ],
                 output="screen",

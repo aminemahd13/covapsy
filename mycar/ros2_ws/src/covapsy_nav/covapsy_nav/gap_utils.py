@@ -1,10 +1,21 @@
-"""Follow-the-gap utility logic."""
+"""Follow-the-gap utility logic with AI-enhanced speed control."""
 
 from __future__ import annotations
 
 import math
+from typing import List
+
 import numpy as np
 
+from covapsy_nav.racing_intelligence import (
+    adaptive_disparity_threshold,
+    adaptive_safety_radius as ai_adaptive_safety_radius,
+    adaptive_steering_gain,
+    compute_optimal_speed,
+    compute_passage_width,
+    estimate_curvature,
+    extract_sector_ranges,
+)
 
 _NEAREST_HEADING_PENALTY = 0.45
 _ANGLE_PENALTY_PER_RAD = 0.22
@@ -14,6 +25,10 @@ _GAP_SCORE_HEADING_WEIGHT = 0.10
 _GAP_EDGE_PENALTY = 0.22
 _SPEED_LOOKAHEAD_WINDOW_DEG = 14.0
 _SPEED_TTC_WINDOW_DEG = 8.0
+
+# Module-level state for curvature smoothing across calls
+_prev_curvature: float = 0.0
+_prev_speed: float = 0.0
 
 
 def _find_free_gaps(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -90,8 +105,17 @@ def compute_gap_command(
     steering_slew_rate: float = 0.07,
     max_steering: float = 0.5,
     ttc_target_sec: float = 1.2,
+    use_ai_speed: bool = True,
+    depth_front_dist: float = float("inf"),
 ) -> tuple[float, float]:
-    """Compute (speed_m_s, steering_rad) from filtered scan data."""
+    """Compute (speed_m_s, steering_rad) from filtered scan data.
+
+    When ``use_ai_speed=True`` (default), uses the racing intelligence module
+    for curvature-aware predictive speed control.  Falls back to the classic
+    heuristic formula otherwise.
+    """
+    global _prev_curvature, _prev_speed
+
     ranges = np.array(ranges_in, dtype=np.float64)
     n = len(ranges)
     if n == 0:
@@ -101,6 +125,22 @@ def compute_gap_command(
     ranges = np.clip(ranges, 0.0, max_range)
 
     angles = angle_min + np.arange(n) * angle_increment
+
+    # --- AI: curvature estimation from full 360° scan ---
+    ranges_360: List[float] = []
+    if use_ai_speed and n >= 180:
+        # Build 360-entry range array indexed by degree (0=front)
+        for deg in range(360):
+            rad = math.radians(deg if deg <= 180 else deg - 360)
+            # Find nearest scan index
+            idx_f = (rad - angle_min) / angle_increment if angle_increment != 0 else 0
+            idx_i = max(0, min(n - 1, int(round(idx_f))))
+            ranges_360.append(float(ranges[idx_i]))
+
+        sector_ranges = extract_sector_ranges(ranges_360)
+        _prev_curvature = estimate_curvature(sector_ranges, _prev_curvature)
+    else:
+        sector_ranges = []
 
     fov = math.radians(fov_degrees)
     front_mask = np.abs(angles) <= (fov * 0.5)
@@ -114,11 +154,16 @@ def compute_gap_command(
     fn = len(f_ranges)
     angle_inc = abs(angle_increment) if angle_increment != 0.0 else (2.0 * math.pi / n)
 
+    # --- AI: adaptive disparity threshold based on curvature ---
+    effective_disparity = disparity_threshold
+    if use_ai_speed:
+        effective_disparity = adaptive_disparity_threshold(_prev_curvature, disparity_threshold)
+
     # Disparity extension
     half_width = car_width * 0.5
     for i in range(1, fn):
         diff = abs(f_ranges[i] - f_ranges[i - 1])
-        if diff > disparity_threshold:
+        if diff > effective_disparity:
             ci = i if f_ranges[i] < f_ranges[i - 1] else i - 1
             cr = f_ranges[ci]
             if cr > 0.05:
@@ -129,13 +174,22 @@ def compute_gap_command(
                 for j in range(lo, hi):
                     f_ranges[j] = min(f_ranges[j], cr)
 
+    # --- AI: adaptive safety radius based on passage width ---
+    passage_width = compute_passage_width(
+        list(reference_ranges), list(f_angles),
+    )
+    if use_ai_speed:
+        effective_safety = ai_adaptive_safety_radius(passage_width, safety_radius)
+    else:
+        effective_safety = safety_radius
+
     # Safety bubble
     nearest_idx = int(np.argmin(reference_ranges + _NEAREST_HEADING_PENALTY * np.abs(f_angles)))
     nearest_dist = float(reference_ranges[nearest_idx])
-    if nearest_dist < safety_radius * 5.0:
+    if nearest_dist < effective_safety * 5.0:
         for i in range(fn):
             arc_dist = nearest_dist * abs(f_angles[i] - f_angles[nearest_idx])
-            if arc_dist < safety_radius:
+            if arc_dist < effective_safety:
                 f_ranges[i] = 0.0
 
     # Best gap among all free gaps
@@ -161,7 +215,12 @@ def compute_gap_command(
     best_idx = int(idx[int(np.argmax(point_scores))])
     target_angle = float(f_angles[best_idx])
 
-    raw_steering = steering_gain * target_angle
+    # --- AI: adaptive steering gain in curves ---
+    effective_gain = steering_gain
+    if use_ai_speed:
+        effective_gain = adaptive_steering_gain(_prev_curvature, steering_gain)
+
+    raw_steering = effective_gain * target_angle
     raw_steering = max(-max_steering, min(max_steering, raw_steering))
     steering = max(
         float(prev_steering) - float(steering_slew_rate),
@@ -183,21 +242,43 @@ def compute_gap_command(
         fallback=nearest_dist,
     )
 
-    steer_factor = 1.0 - 0.7 * abs(steering) / max(max_steering, 1e-6)
-    free_space_factor = max(0.0, min(1.0, (projected_clearance - 0.14) / 1.35))
-    speed = min_speed + (max_speed - min_speed) * steer_factor * free_space_factor
+    # Fuse depth camera with LiDAR clearance (depth wins if closer)
+    if math.isfinite(depth_front_dist) and depth_front_dist > 0:
+        projected_clearance = min(projected_clearance, depth_front_dist)
+        projected_ttc_clearance = min(projected_ttc_clearance, depth_front_dist)
 
-    # TTC guard: slow down when projected front time-to-collision is short.
-    speed = max(0.0, min(max_speed, speed))
-    ttc = projected_ttc_clearance / max(speed, 0.05)
-    target_ttc = max(float(ttc_target_sec), 0.2)
-    if ttc < target_ttc:
-        speed = min(speed, projected_ttc_clearance / target_ttc)
-
-    # Keep low-speed creeping when space is available, allow near-stop in dense traffic.
-    if projected_clearance > 0.35:
-        speed = max(min_speed, speed)
+    # --- Speed computation ---
+    if use_ai_speed and sector_ranges:
+        speed = compute_optimal_speed(
+            max_speed=max_speed,
+            min_speed=min_speed,
+            steering_rad=steering,
+            max_steering=max_steering,
+            projected_clearance=projected_clearance,
+            passage_width=passage_width,
+            curvature=_prev_curvature,
+            prev_speed=_prev_speed,
+            sector_ranges=sector_ranges,
+            ttc_clearance=projected_ttc_clearance,
+            ttc_target_sec=ttc_target_sec,
+        )
     else:
-        speed = max(0.0, speed)
-    speed = min(max_speed, speed)
+        # Classic heuristic fallback
+        steer_factor = 1.0 - 0.7 * abs(steering) / max(max_steering, 1e-6)
+        free_space_factor = max(0.0, min(1.0, (projected_clearance - 0.14) / 1.35))
+        speed = min_speed + (max_speed - min_speed) * steer_factor * free_space_factor
+
+        speed = max(0.0, min(max_speed, speed))
+        ttc = projected_ttc_clearance / max(speed, 0.05)
+        target_ttc = max(float(ttc_target_sec), 0.2)
+        if ttc < target_ttc:
+            speed = min(speed, projected_ttc_clearance / target_ttc)
+
+        if projected_clearance > 0.35:
+            speed = max(min_speed, speed)
+        else:
+            speed = max(0.0, speed)
+        speed = min(max_speed, speed)
+
+    _prev_speed = speed
     return float(speed), float(steering)

@@ -11,6 +11,25 @@ Keyboard controls:
 
 import math
 import os
+import sys
+
+# Allow importing shared AI modules from the ROS2 workspace (pure-Python, no ROS2 dep)
+_RACING_INTEL_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..",
+                 "ros2_ws", "src", "covapsy_nav", "covapsy_nav")
+)
+if os.path.isdir(_RACING_INTEL_DIR) and _RACING_INTEL_DIR not in sys.path:
+    sys.path.insert(0, _RACING_INTEL_DIR)
+
+try:
+    from racing_intelligence import (
+        extract_sector_ranges,
+        estimate_curvature,
+        compute_optimal_speed,
+    )
+    AI_SPEED_AVAILABLE = True
+except ImportError:
+    AI_SPEED_AVAILABLE = False
 
 try:
     from controller import Camera, Lidar, RangeFinder
@@ -378,6 +397,14 @@ def adaptive_safety_radius(front_ranges, front_angles):
 
 def estimate_curvature_speed_limit(ranges, speed_cap_m_s):
     """Estimate upcoming curvature from LiDAR range asymmetry and limit speed."""
+    # Use shared AI curvature estimation if available
+    if AI_SPEED_AVAILABLE:
+        sectors = extract_sector_ranges(ranges)
+        curv = estimate_curvature(sectors)
+        from racing_intelligence import predictive_brake_factor
+        brake = predictive_brake_factor(sectors, curv)
+        return max(speed_cap_m_s * brake, MIN_SPEED_FLOOR_M_S)
+
     left_ranges = []
     right_ranges = []
     for deg in range(5, CURVATURE_LOOKAHEAD_HALF_DEG + 1):
@@ -728,8 +755,23 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
     if projected_clearance < 0.45 and turn_ratio > 0.55:
         adaptive_floor = max(adaptive_floor, 0.22)
     cap = max(adaptive_floor, speed_cap_m_s)
-    speed_m_s = adaptive_floor + (cap - adaptive_floor) * steering_factor * clearance_factor
-    speed_m_s = clamp(speed_m_s, adaptive_floor, cap)
+
+    # Use AI-enhanced speed when available, fall back to classic heuristic
+    if AI_SPEED_AVAILABLE:
+        sectors = extract_sector_ranges(ranges)
+        curvature = estimate_curvature(sectors)
+        speed_m_s = compute_optimal_speed(
+            curvature=curvature,
+            front_clearance=projected_clearance,
+            steering_rad=steering_rad,
+            max_speed=cap,
+            min_speed=adaptive_floor,
+            max_steering=MAX_STEERING_RAD,
+        )
+    else:
+        speed_m_s = adaptive_floor + (cap - adaptive_floor) * steering_factor * clearance_factor
+        speed_m_s = clamp(speed_m_s, adaptive_floor, cap)
+
     ttc_speed_cap = projected_ttc_clearance / max(SPEED_TARGET_TTC_SEC, 0.1)
     speed_m_s = min(speed_m_s, max(0.0, ttc_speed_cap))
     return steering_rad, speed_m_s

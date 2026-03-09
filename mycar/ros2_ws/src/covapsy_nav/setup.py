@@ -25,6 +25,7 @@ setup(
             'tactical_race_node = covapsy_nav.tactical_race_node:main',
             'racing_path_publisher_node = covapsy_nav.racing_path_publisher_node:main',
             'runtime_monitor_node = covapsy_nav.runtime_monitor_node:main',
+            'track_learner_node = covapsy_nav.track_learner_node:main',
         ],
     },
 )

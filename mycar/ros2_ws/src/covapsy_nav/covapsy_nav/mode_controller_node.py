@@ -34,8 +34,8 @@ from std_msgs.msg import Bool, Float32, String
 
 from covapsy_nav.mode_rules import DriveCommand, select_mode_command, select_recovery_command
 
-_ACTIVE_MODES = ('REACTIVE', 'MAPPING', 'RACING')
-_VALID_MODES = ('IDLE', 'REACTIVE', 'MAPPING', 'RACING', 'STOPPED')
+_ACTIVE_MODES = ('REACTIVE', 'MAPPING', 'RACING', 'LEARNING')
+_VALID_MODES = ('IDLE', 'REACTIVE', 'MAPPING', 'RACING', 'LEARNING', 'STOPPED')
 _EMERGENCY_STOP_DIST = 0.15
 _PHASE_DURATIONS = (0.20, 0.10)  # phase 0 (brake), phase 1 (neutral) in seconds
 
@@ -58,6 +58,8 @@ class ModeControllerNode(Node):
         self.declare_parameter('lock_mode_after_start', True)
         self.declare_parameter('enable_tactical_ai', False)
         self.declare_parameter('tactical_timeout', 0.25)
+        self.declare_parameter('auto_switch_to_racing', True)
+        self.declare_parameter('learning_speed_cap', 0.8)
 
         initial_mode = str(self.get_parameter('initial_mode').value).upper()
         self.mode = initial_mode if initial_mode in _VALID_MODES else 'IDLE'
@@ -74,6 +76,8 @@ class ModeControllerNode(Node):
         self.create_subscription(Bool, '/rear_obstacle', self.rear_cb, 10)
         self.create_subscription(Float32, '/wheel_speed', self.wheel_speed_cb, 10)
         self.create_subscription(String, '/set_mode', self.set_mode_cb, 10)
+        self.create_subscription(Bool, '/track_learned', self.track_learned_cb, 10)
+        self.create_subscription(Bool, '/depth_obstacle', self.depth_obstacle_cb, 10)
 
         # Publishers
         self.cmd_pub = self.create_publisher(Twist, self.command_topic, 10)
@@ -87,7 +91,9 @@ class ModeControllerNode(Node):
         self.has_map = False
         self.min_front_dist = float('inf')
         self.rear_blocked = False
+        self.depth_obstacle = False
         self.wheel_speed = 0.0
+        self.track_learned = False
 
         # Stuck detection & recovery state
         self.stopped_since: float = 0.0
@@ -160,6 +166,20 @@ class ModeControllerNode(Node):
 
     def set_mode_cb(self, msg: String):
         self.set_mode(str(msg.data).strip().upper(), from_external=True)
+
+    def track_learned_cb(self, msg: Bool):
+        if msg.data and not self.track_learned:
+            self.track_learned = True
+            self.get_logger().info('Track learned signal received')
+            if (
+                self.mode == 'LEARNING'
+                and bool(self.get_parameter('auto_switch_to_racing').value)
+            ):
+                self.mode = 'RACING'
+                self.get_logger().info('Auto-switched to RACING mode')
+
+    def depth_obstacle_cb(self, msg: Bool):
+        self.depth_obstacle = bool(msg.data)
 
     def set_mode(self, new_mode: str, from_external: bool = False):
         """Externally set mode (e.g., from a service or parameter change)."""

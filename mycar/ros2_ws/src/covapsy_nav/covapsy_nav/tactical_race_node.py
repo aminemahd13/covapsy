@@ -1,6 +1,7 @@
-"""Opponent-aware tactical racing node.
+"""Opponent-aware tactical racing node with Kalman-tracked predictions.
 
 Publishes /cmd_vel_tactical for RACING mode arbitration.
+Uses multi-frame opponent tracking for stable passing decisions.
 """
 
 from __future__ import annotations
@@ -27,9 +28,18 @@ from covapsy_nav.tactical_utils import (
     traffic_mode_speed_bias,
 )
 
+try:
+    from covapsy_nav.opponent_tracker import (
+        OpponentTracker,
+        extract_opponent_clusters,
+    )
+    TRACKER_AVAILABLE = True
+except ImportError:
+    TRACKER_AVAILABLE = False
+
 
 class TacticalRaceNode(Node):
-    """Generate conservative opponent-aware tactical commands."""
+    """Generate opponent-aware tactical commands with predictive tracking."""
 
     def __init__(self):
         super().__init__("tactical_race")
@@ -46,6 +56,7 @@ class TacticalRaceNode(Node):
         self.declare_parameter("max_steering", 0.5)
         self.declare_parameter("pass_lock_sec", 0.65)
         self.declare_parameter("steering_bias_gain", 0.18)
+        self.declare_parameter("enable_predictive_tracking", True)
 
         self.reactive_cmd = Twist()
         self.pursuit_cmd = Twist()
@@ -55,6 +66,12 @@ class TacticalRaceNode(Node):
         self.odom_msg: Odometry | None = None
         self.pass_side = 0
         self.pass_lock_until = 0.0
+        self.opponent_count = 0.0
+
+        # Kalman tracker for multi-frame opponent prediction
+        self.tracker: OpponentTracker | None = None
+        if TRACKER_AVAILABLE and bool(self.get_parameter("enable_predictive_tracking").value):
+            self.tracker = OpponentTracker()
 
         self.create_subscription(Twist, "/cmd_vel_reactive", self.reactive_cb, 20)
         self.create_subscription(Twist, "/cmd_vel_pursuit", self.pursuit_cb, 20)
@@ -62,10 +79,14 @@ class TacticalRaceNode(Node):
         self.create_subscription(Odometry, "/odom", self.odom_cb, 20)
         self.create_subscription(Float32, "/camera_steering_offset", self.camera_cb, 20)
         self.create_subscription(Float32, "/opponent_confidence", self.opp_conf_cb, 20)
+        self.create_subscription(Float32, "/opponent_count", self.opp_count_cb, 20)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel_tactical", 20)
 
         self.create_timer(0.02, self.control_loop)
-        self.get_logger().info("Tactical race node started")
+        if self.tracker is not None:
+            self.get_logger().info("Tactical race node started (predictive tracking ON)")
+        else:
+            self.get_logger().info("Tactical race node started")
 
     def reactive_cb(self, msg: Twist):
         self.reactive_cmd = msg
@@ -84,6 +105,9 @@ class TacticalRaceNode(Node):
 
     def opp_conf_cb(self, msg: Float32):
         self.external_opp_conf = clamp(msg.data, 0.0, 1.0)
+
+    def opp_count_cb(self, msg: Float32):
+        self.opponent_count = max(0.0, float(msg.data))
 
     def _base_command(self) -> tuple[float, float]:
         pursuit_speed = float(self.pursuit_cmd.linear.x)
@@ -171,7 +195,35 @@ class TacticalRaceNode(Node):
 
         if confidence > 0.30 and front_min < follow_distance:
             # Slow down in traffic and bias steering toward clearer side.
-            speed *= clamp(front_min / max(follow_distance, 0.2), 0.30, 1.0)
+            slow_factor = clamp(front_min / max(follow_distance, 0.2), 0.30, 1.0)
+
+            # Use Kalman-tracked predictions for smarter reactions
+            if self.tracker is not None and self.scan_msg is not None:
+                ranges = np.array(self.scan_msg.ranges, dtype=np.float32)
+                angles = float(self.scan_msg.angle_min) + np.arange(ranges.size) * float(self.scan_msg.angle_increment)
+                clusters = extract_opponent_clusters(ranges, angles,
+                                                     max_dist=float(self.get_parameter("opponent_detect_range").value))
+                dt = 0.02  # control loop period
+                self.tracker.predict(dt)
+                self.tracker.update(clusters)
+
+                # Find closest opponent ahead and check if it's moving away
+                from covapsy_nav.opponent_tracker import nearest_opponent_ahead, predict_passing_opportunity
+                nearest = nearest_opponent_ahead(self.tracker)
+                if nearest is not None:
+                    # Opponent tracked: use predicted behaviour
+                    opp_dist = math.hypot(nearest.state[0], nearest.state[1])
+                    opp_vx = nearest.state[2]  # positive = moving away in car frame
+                    # If opponent is slower or stationary, start passing manoeuvre
+                    passing = predict_passing_opportunity(self.tracker, car_speed=base_speed)
+                    if passing:
+                        # Opportunity to pass: be more aggressive
+                        slow_factor = max(slow_factor, 0.70)
+                    elif opp_vx > 0.3:
+                        # Opponent moving away: less braking needed
+                        slow_factor = max(slow_factor, 0.50)
+
+            speed *= slow_factor
             steer += steering_bias_gain * float(side)
             steer = clamp(steer, -max_steering, max_steering)
         else:
