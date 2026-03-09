@@ -3,11 +3,12 @@
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Imu
 from std_msgs.msg import Float32
 
 from covapsy_nav.gap_utils import compute_gap_command
 from covapsy_nav.race_profiles import resolve_profile_speed_cap
+from covapsy_nav.vehicle_state_estimator import VehicleStateEstimator
 
 
 class GapFollowerNode(Node):
@@ -32,17 +33,41 @@ class GapFollowerNode(Node):
         self.declare_parameter("max_steering", 0.5)
         self.declare_parameter("ttc_target_sec", 0.70)
         self.declare_parameter("use_ai_speed", True)
+        self.declare_parameter("use_imu_fusion", True)
 
         self.create_subscription(LaserScan, "/scan_filtered", self.scan_cb, 10)
         self.create_subscription(Float32, "/depth_front_dist", self.depth_cb, 10)
+        self.create_subscription(Imu, "/imu/data", self.imu_cb, 20)
+        self.create_subscription(Float32, "/wheel_speed", self.wheel_speed_cb, 10)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel_reactive", 10)
         self.prev_steering = 0.0
         self.depth_front_dist = float("inf")
 
-        self.get_logger().info("Gap follower node started (AI speed enabled)")
+        # Vehicle state estimator (EKF fusing IMU + wheel speed + LiDAR)
+        self._state_estimator = VehicleStateEstimator()
+        self._imu_active = False
+
+        self.get_logger().info("Gap follower node started (AI speed + IMU fusion enabled)")
 
     def depth_cb(self, msg: Float32):
         self.depth_front_dist = float(msg.data)
+
+    def imu_cb(self, msg: Imu):
+        """Fuse IMU data into vehicle state at IMU rate (~100 Hz)."""
+        if not bool(self.get_parameter("use_imu_fusion").value):
+            return
+        self._state_estimator.update_imu(
+            yaw_rate=float(msg.angular_velocity.z),
+            lat_accel=float(msg.linear_acceleration.y),
+            lon_accel=float(msg.linear_acceleration.x),
+        )
+        self._imu_active = True
+
+    def wheel_speed_cb(self, msg: Float32):
+        """Fuse wheel encoder speed into vehicle state."""
+        if not bool(self.get_parameter("use_imu_fusion").value):
+            return
+        self._state_estimator.update_wheel_speed(float(msg.data))
 
     def scan_cb(self, msg: LaserScan):
         configured_max_speed = float(self.get_parameter("max_speed").value)
@@ -53,6 +78,12 @@ class GapFollowerNode(Node):
             max_speed_sim_cap=float(self.get_parameter("max_speed_sim_cap").value),
         )
         max_speed = min(configured_max_speed, profile_cap)
+
+        # Get fused vehicle state if IMU is active
+        vehicle_state = None
+        if self._imu_active and bool(self.get_parameter("use_imu_fusion").value):
+            self._state_estimator.predict()
+            vehicle_state = self._state_estimator.state
 
         speed, steering = compute_gap_command(
             ranges_in=msg.ranges,
@@ -72,6 +103,7 @@ class GapFollowerNode(Node):
             ttc_target_sec=float(self.get_parameter("ttc_target_sec").value),
             use_ai_speed=bool(self.get_parameter("use_ai_speed").value),
             depth_front_dist=self.depth_front_dist,
+            vehicle_state=vehicle_state,
         )
         self.prev_steering = steering
 

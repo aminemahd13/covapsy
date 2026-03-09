@@ -61,6 +61,7 @@ def generate_launch_description():
                         "steering_slew_rate": 0.07,
                         "ttc_target_sec": 1.2,
                         "use_ai_speed": True,
+                        "use_imu_fusion": True,
                     }
                 ],
                 output="screen",

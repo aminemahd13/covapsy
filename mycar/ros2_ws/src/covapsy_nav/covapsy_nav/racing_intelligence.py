@@ -1,7 +1,9 @@
 """AI-enhanced racing intelligence — pure Python, no ROS2 dependency.
 
-Provides lightweight algorithms that run at 50 Hz on Raspberry Pi 5:
+Provides lightweight algorithms that run at 50–100 Hz on Raspberry Pi 5:
   - Multi-sector curvature estimation from LiDAR geometry
+  - IMU-fused curvature estimation (instant, gyro-based)
+  - Grip-aware speed limiting via lateral acceleration
   - Optimal speed computation with predictive braking
   - Track section classification (straight / gentle / tight / chicane)
   - Adaptive parameter tuning based on real-time conditions
@@ -12,7 +14,10 @@ Used by both ROS2 nodes and the standalone Webots controller.
 from __future__ import annotations
 
 import math
-from typing import List, Tuple
+from typing import List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from covapsy_nav.vehicle_state_estimator import VehicleState
 
 # ---------------------------------------------------------------------------
 # Sector configuration — divide front FOV into sectors for analysis
@@ -327,3 +332,209 @@ def compute_passage_width(
     left_clear = _median(left_samples, 5.0)
     right_clear = _median(right_samples, 5.0)
     return left_clear + right_clear
+
+
+# ---------------------------------------------------------------------------
+# IMU-fused curvature estimation (FAST PATH — 100 Hz via gyro)
+# ---------------------------------------------------------------------------
+_IMU_LIDAR_CURVATURE_BLEND = 0.30   # IMU weight when both available
+_GRIP_LIMIT_G = 0.65                # max lateral g before limiting speed
+_GRIP_MARGIN_G = 0.15               # soft zone before hard limit
+_GRIP_SPEED_FLOOR = 0.55            # minimum fraction of max_speed under grip limit
+_YAW_RATE_CURVATURE_SCALE = 2.8     # scale factor: yaw_rate → normalised curvature
+
+# Predictive speed via longitudinal acceleration
+_LON_ACCEL_BRAKE_THRESHOLD = -0.8   # m/s² — detect hard braking
+_LON_ACCEL_BOOST_THRESHOLD = 0.5    # m/s² — detect firm acceleration
+_ACCEL_PREDICTIVE_HORIZON = 0.3     # seconds to look ahead for speed prediction
+
+
+def fuse_curvature_with_imu(
+    lidar_curvature: float,
+    vehicle_state: Optional["VehicleState"],
+) -> float:
+    """Fuse LiDAR curvature with IMU yaw-rate for faster, more accurate estimate.
+
+    The IMU yaw rate responds instantly to turn entry (~5 ms latency)
+    while LiDAR curvature has ~100 ms latency from scan processing.
+    Blending gives fast response with LiDAR confirmation.
+
+    Returns normalised curvature in [0..1], same scale as LiDAR.
+    """
+    if vehicle_state is None:
+        return lidar_curvature
+
+    imu_curvature = _clamp(
+        abs(vehicle_state.yaw_rate) * _YAW_RATE_CURVATURE_SCALE,
+        0.0, 1.0,
+    )
+
+    # When car is barely moving, yaw_rate is unreliable → trust LiDAR
+    if vehicle_state.speed < 0.15:
+        return lidar_curvature
+
+    # Weighted blend: IMU is faster but noisier; LiDAR is lagged but geometric
+    w_imu = _IMU_LIDAR_CURVATURE_BLEND
+    # Increase IMU weight when it detects a curve the LiDAR hasn't seen yet
+    # (imu_curvature significantly higher → we're entering a turn)
+    if imu_curvature > lidar_curvature + 0.15:
+        w_imu = min(0.70, w_imu + 0.25)
+    # Decrease IMU weight when exiting a curve (lidar still sees walls)
+    elif lidar_curvature > imu_curvature + 0.20:
+        w_imu = max(0.15, w_imu - 0.10)
+
+    fused = w_imu * imu_curvature + (1.0 - w_imu) * lidar_curvature
+    return _clamp(fused, 0.0, 1.0)
+
+
+def grip_limit_speed_factor(
+    vehicle_state: Optional["VehicleState"],
+) -> float:
+    """Return [0..1] speed scaling based on lateral acceleration (grip limit).
+
+    Uses IMU lateral acceleration to detect when tyres are near the
+    grip limit. Reduces speed to prevent slides and maintain control.
+    """
+    if vehicle_state is None:
+        return 1.0
+
+    lat_g = vehicle_state.cornering_g
+    if lat_g < (_GRIP_LIMIT_G - _GRIP_MARGIN_G):
+        return 1.0  # plenty of grip
+    if lat_g >= _GRIP_LIMIT_G:
+        return _GRIP_SPEED_FLOOR  # at the limit
+
+    # Smooth transition in the margin zone
+    t = (lat_g - (_GRIP_LIMIT_G - _GRIP_MARGIN_G)) / max(_GRIP_MARGIN_G, 0.01)
+    return 1.0 - (1.0 - _GRIP_SPEED_FLOOR) * t
+
+
+def imu_predictive_speed_adjust(
+    current_speed: float,
+    vehicle_state: Optional["VehicleState"],
+) -> float:
+    """Adjust target speed using longitudinal acceleration prediction.
+
+    If the car is accelerating, we can be slightly bolder.
+    If braking hard (e.g. hitting a bump or overshoot), reduce target faster.
+    """
+    if vehicle_state is None:
+        return current_speed
+
+    lon_accel = vehicle_state.lon_accel
+    predicted_speed = current_speed + lon_accel * _ACCEL_PREDICTIVE_HORIZON
+
+    if lon_accel < _LON_ACCEL_BRAKE_THRESHOLD:
+        # Hard braking detected — expect speed to drop, pre-adjust
+        return max(0.0, min(current_speed, predicted_speed * 0.95))
+
+    if lon_accel > _LON_ACCEL_BOOST_THRESHOLD:
+        # Consistent acceleration — can trust slightly higher target
+        return current_speed * 1.05
+
+    return current_speed
+
+
+def compute_optimal_speed_fused(
+    max_speed: float,
+    min_speed: float,
+    steering_rad: float,
+    max_steering: float,
+    projected_clearance: float,
+    passage_width: float,
+    curvature: float,
+    prev_speed: float,
+    sector_ranges: List[float],
+    ttc_clearance: float,
+    vehicle_state: Optional["VehicleState"] = None,
+    ttc_target_sec: float = 0.70,
+    speed_ramp_up: float = 0.35,
+    speed_ramp_down: float = 0.25,
+) -> float:
+    """Enhanced speed computation with IMU sensor fusion.
+
+    When vehicle_state is provided (from VehicleStateEstimator):
+      - Uses fused curvature (instant IMU + confirmed LiDAR)
+      - Applies grip-limit speed reduction from lateral acceleration
+      - Uses acceleration prediction for smoother speed transitions
+      - Faster ramp rates when IMU confirms safe conditions
+
+    Falls back cleanly to LiDAR-only when vehicle_state is None.
+    """
+    # Fuse curvature: IMU + LiDAR for faster corner detection
+    fused_curvature = fuse_curvature_with_imu(curvature, vehicle_state)
+
+    # Base speed from fused curvature
+    section = classify_section(fused_curvature)
+    base_factor = section_speed_factor(section)
+
+    steer_ratio = _clamp(abs(steering_rad) / max(max_steering, 1e-6), 0.0, 1.0)
+    steer_penalty = 1.0 - 0.18 * steer_ratio
+
+    clearance_factor = _clamp((projected_clearance - 0.06) / 0.9, 0.0, 1.0)
+
+    width_factor = _clamp(
+        (passage_width - _NARROW_PASSAGE_M) / (_WIDE_PASSAGE_M - _NARROW_PASSAGE_M),
+        0.0, 1.0,
+    )
+    width_boost = 1.0 + 0.22 * width_factor
+
+    brake_factor = predictive_brake_factor(sector_ranges, fused_curvature)
+
+    # Grip-limit factor from IMU lateral acceleration
+    grip_factor = grip_limit_speed_factor(vehicle_state)
+
+    accel_boost = 1.0
+    if (
+        section == "straight"
+        and projected_clearance > _ACCEL_BOOST_MIN_CLEARANCE
+        and prev_speed > 0.5
+    ):
+        accel_boost = _ACCEL_BOOST_FACTOR
+        # Extra aggressive boost when IMU confirms we're on straight + accelerating
+        if (
+            vehicle_state is not None
+            and vehicle_state.is_accelerating
+            and vehicle_state.cornering_g < 0.15
+        ):
+            accel_boost = min(accel_boost * 1.08, 1.45)
+
+    # Combine all factors
+    raw_speed = max_speed * base_factor * steer_penalty * clearance_factor
+    raw_speed *= width_boost * brake_factor * accel_boost * grip_factor
+    raw_speed = _clamp(raw_speed, min_speed, max_speed)
+
+    # TTC guard
+    if raw_speed > 0.10:
+        ttc = ttc_clearance / max(raw_speed, 0.10)
+        if ttc < max(ttc_target_sec, 0.15):
+            raw_speed = min(raw_speed, ttc_clearance / max(ttc_target_sec, 0.15))
+
+    if projected_clearance > 0.35:
+        raw_speed = max(min_speed, raw_speed)
+    raw_speed = _clamp(raw_speed, 0.0, max_speed)
+
+    # Acceleration-predictive refinement
+    raw_speed = imu_predictive_speed_adjust(raw_speed, vehicle_state)
+    raw_speed = _clamp(raw_speed, 0.0, max_speed)
+
+    # Adaptive ramp rates: faster when IMU confirms stable conditions
+    effective_ramp_up = speed_ramp_up
+    effective_ramp_down = speed_ramp_down
+    if vehicle_state is not None:
+        # On straight with low lateral g → can accelerate faster
+        if vehicle_state.cornering_g < 0.20 and section == "straight":
+            effective_ramp_up = speed_ramp_up * 1.4
+        # When grip is high and braking → allow faster deceleration response
+        if vehicle_state.is_braking:
+            effective_ramp_down = speed_ramp_down * 1.3
+
+    if prev_speed > 0.05:
+        if raw_speed > prev_speed:
+            speed = min(raw_speed, prev_speed + effective_ramp_up)
+        else:
+            speed = max(raw_speed, prev_speed - effective_ramp_down)
+    else:
+        speed = raw_speed
+
+    return _clamp(speed, 0.0, max_speed)

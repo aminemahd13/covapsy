@@ -26,13 +26,29 @@ try:
         extract_sector_ranges,
         estimate_curvature,
         compute_optimal_speed,
+        compute_optimal_speed_fused,
+        fuse_curvature_with_imu,
     )
     AI_SPEED_AVAILABLE = True
 except ImportError:
     AI_SPEED_AVAILABLE = False
 
+# Import the EKF vehicle state estimator for IMU fusion
+_STATE_ESTIMATOR_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..",
+                 "ros2_ws", "src", "covapsy_nav", "covapsy_nav")
+)
+if os.path.isdir(_STATE_ESTIMATOR_DIR) and _STATE_ESTIMATOR_DIR not in sys.path:
+    sys.path.insert(0, _STATE_ESTIMATOR_DIR)
+
 try:
-    from controller import Camera, Lidar, RangeFinder
+    from vehicle_state_estimator import VehicleStateEstimator
+    STATE_ESTIMATOR_AVAILABLE = True
+except ImportError:
+    STATE_ESTIMATOR_AVAILABLE = False
+
+try:
+    from controller import Camera, Lidar, RangeFinder, InertialUnit, GPS
     from vehicle import Driver
 
     WEBOTS_AVAILABLE = True
@@ -40,6 +56,8 @@ except Exception:
     Camera = object
     Lidar = object
     RangeFinder = object
+    InertialUnit = object
+    GPS = object
     Driver = object
     WEBOTS_AVAILABLE = False
 
@@ -699,7 +717,7 @@ def blend_lidar_and_camera_steering(lidar_steering_rad, camera_state):
     return clamp(fused, -MAX_STEERING_RAD, MAX_STEERING_RAD)
 
 
-def advanced_gap_follower(ranges, speed_cap_m_s):
+def advanced_gap_follower(ranges, speed_cap_m_s, vehicle_state=None):
     global _ai_prev_speed
     _front_indices, front_ranges, front_angles = front_sector(ranges)
     if not front_ranges:
@@ -796,19 +814,38 @@ def advanced_gap_follower(ranges, speed_cap_m_s):
     if AI_SPEED_AVAILABLE:
         sectors = extract_sector_ranges(ranges)
         curvature = estimate_curvature(sectors)
-        speed_m_s = compute_optimal_speed(
-            max_speed=cap,
-            min_speed=adaptive_floor,
-            steering_rad=steering_rad,
-            max_steering=MAX_STEERING_RAD,
-            projected_clearance=projected_clearance,
-            passage_width=left_clear + right_clear,
-            curvature=curvature,
-            prev_speed=_ai_prev_speed,
-            sector_ranges=sectors,
-            ttc_clearance=projected_ttc_clearance,
-            ttc_target_sec=SPEED_TARGET_TTC_SEC,
-        )
+        # Fuse with IMU for faster curvature detection
+        if vehicle_state is not None:
+            curvature = fuse_curvature_with_imu(curvature, vehicle_state)
+        if vehicle_state is not None:
+            speed_m_s = compute_optimal_speed_fused(
+                max_speed=cap,
+                min_speed=adaptive_floor,
+                steering_rad=steering_rad,
+                max_steering=MAX_STEERING_RAD,
+                projected_clearance=projected_clearance,
+                passage_width=left_clear + right_clear,
+                curvature=curvature,
+                prev_speed=_ai_prev_speed,
+                sector_ranges=sectors,
+                ttc_clearance=projected_ttc_clearance,
+                vehicle_state=vehicle_state,
+                ttc_target_sec=SPEED_TARGET_TTC_SEC,
+            )
+        else:
+            speed_m_s = compute_optimal_speed(
+                max_speed=cap,
+                min_speed=adaptive_floor,
+                steering_rad=steering_rad,
+                max_steering=MAX_STEERING_RAD,
+                projected_clearance=projected_clearance,
+                passage_width=left_clear + right_clear,
+                curvature=curvature,
+                prev_speed=_ai_prev_speed,
+                sector_ranges=sectors,
+                ttc_clearance=projected_ttc_clearance,
+                ttc_target_sec=SPEED_TARGET_TTC_SEC,
+            )
         _ai_prev_speed = speed_m_s
         # AI path already applied its own TTC guard — skip redundant outer guard
         return steering_rad, speed_m_s
@@ -920,6 +957,26 @@ def run_controller():
     lidar = Lidar("RpLidarA2")
     lidar.enable(sensor_time_step)
     lidar.enablePointCloud()
+
+    # Enable IMU (InertialUnit) and GPS for sensor fusion
+    imu_device = None
+    gps_device = None
+    try:
+        imu_device = InertialUnit("imu")
+        imu_device.enable(sensor_time_step)
+    except Exception:
+        imu_device = None
+    try:
+        gps_device = GPS("gps")
+        gps_device.enable(sensor_time_step)
+    except Exception:
+        gps_device = None
+
+    # Initialize EKF state estimator
+    state_estimator = None
+    if STATE_ESTIMATOR_AVAILABLE and imu_device is not None:
+        state_estimator = VehicleStateEstimator()
+
     rgb_camera, rgb_camera_name = try_enable_optional_sensor(
         driver,
         RGB_CAMERA_CANDIDATES,
@@ -963,6 +1020,9 @@ def run_controller():
     uturn_steer_sign = 1.0  # +1 or -1: which direction to steer during U-turn
     logs_enabled = env_flag(STANDALONE_LOG_ENV, default=False)
     log_counter = 0
+    prev_imu_speed = 0.0
+    prev_imu_yaw = 0.0
+    prev_imu_time = 0.0
 
     print("=" * 64)
     print("COVAPSY Standalone Webots Controller")
@@ -993,10 +1053,10 @@ def run_controller():
             "Camera guidance: depth sensor disabled/unavailable "
             f"[set {DEPTH_GUIDANCE_ENV}=1 to enable]"
         )
-    print("=" * 64)
-
-    set_drive_command(driver, 0.0, 0.0)
-
+    if state_estimator is not None:
+        print("IMU sensor fusion: ENABLED (EKF state estimator active)")
+    else:
+        print("IMU sensor fusion: DISABLED (no InertialUnit or estimator unavailable)")
     while driver.step() != -1:
         while True:
             key = keyboard.getKey()
@@ -1058,6 +1118,39 @@ def run_controller():
 
         ranges = read_lidar_front_zero(lidar)
         last_ranges = ranges
+
+        # ---- IMU sensor fusion update ----
+        vehicle_state = None
+        if state_estimator is not None:
+            cur_time = driver.getTime()
+            # Read IMU (InertialUnit → roll/pitch/yaw)
+            if imu_device is not None:
+                rpy = imu_device.getRollPitchYaw()
+                yaw = float(rpy[2])
+                # Derive yaw rate from yaw delta
+                dt_imu = max(cur_time - prev_imu_time, 0.001) if prev_imu_time > 0 else 0.032
+                yaw_rate = (yaw - prev_imu_yaw) / dt_imu
+                # Handle wrap-around at ±π
+                if yaw_rate > math.pi / dt_imu:
+                    yaw_rate -= 2.0 * math.pi / dt_imu
+                elif yaw_rate < -math.pi / dt_imu:
+                    yaw_rate += 2.0 * math.pi / dt_imu
+
+                # Get speed from vehicle API
+                cur_speed = read_vehicle_speed_m_s(driver)
+                if cur_speed is None:
+                    cur_speed = 0.0
+                lon_accel = (cur_speed - prev_imu_speed) / dt_imu
+                lat_accel = cur_speed * yaw_rate  # centripetal
+
+                state_estimator.update_imu(yaw_rate, lat_accel, lon_accel)
+                state_estimator.update_wheel_speed(cur_speed)
+                state_estimator.update_yaw(yaw)
+                vehicle_state = state_estimator.state
+
+                prev_imu_speed = cur_speed
+                prev_imu_yaw = yaw
+                prev_imu_time = cur_time
 
         if reverse_ticks > 0:
             reverse_ticks -= 1
@@ -1140,7 +1233,7 @@ def run_controller():
             effective_cap = min(speed_cap, curvature_cap)
 
         if use_advanced:
-            steering, target_speed = advanced_gap_follower(ranges, effective_cap)
+            steering, target_speed = advanced_gap_follower(ranges, effective_cap, vehicle_state)
         else:
             steering, target_speed = simple_baseline(ranges, effective_cap)
 
@@ -1241,7 +1334,14 @@ def run_controller():
                     f"cam_order={camera_state['order_confidence']:.2f} "
                     f"uturn_cnt={wrong_order_counter}/{UTURN_TRIGGER_FRAMES} "
                     f"cam_lock={int(camera_state.get('lane_locked', False))} "
-                    f"cam_depth={camera_state.get('depth_sample_count', 0)}"
+                    f"cam_depth={camera_state.get('depth_sample_count', 0)} "
+                    f"imu={'Y' if vehicle_state else 'N'}"
+                    + (
+                        f" yr={vehicle_state.yaw_rate:+.2f}r/s"
+                        f" lg={vehicle_state.cornering_g:.2f}g"
+                        f" fc={vehicle_state.abs_curvature_normalised:.2f}"
+                        if vehicle_state else ""
+                    )
                 )
 
         set_drive_command(driver, steering, smoothed_speed)

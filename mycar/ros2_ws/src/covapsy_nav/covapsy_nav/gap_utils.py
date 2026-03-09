@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
 
 import numpy as np
 
@@ -12,10 +12,15 @@ from covapsy_nav.racing_intelligence import (
     adaptive_safety_radius as ai_adaptive_safety_radius,
     adaptive_steering_gain,
     compute_optimal_speed,
+    compute_optimal_speed_fused,
     compute_passage_width,
     estimate_curvature,
     extract_sector_ranges,
+    fuse_curvature_with_imu,
 )
+
+if TYPE_CHECKING:
+    from covapsy_nav.vehicle_state_estimator import VehicleState
 
 _NEAREST_HEADING_PENALTY = 0.30
 _ANGLE_PENALTY_PER_RAD = 0.14
@@ -107,6 +112,7 @@ def compute_gap_command(
     ttc_target_sec: float = 1.2,
     use_ai_speed: bool = True,
     depth_front_dist: float = float("inf"),
+    vehicle_state: Optional["VehicleState"] = None,
 ) -> tuple[float, float]:
     """Compute (speed_m_s, steering_rad) from filtered scan data.
 
@@ -139,6 +145,9 @@ def compute_gap_command(
 
         sector_ranges = extract_sector_ranges(ranges_360)
         _prev_curvature = estimate_curvature(sector_ranges, _prev_curvature)
+        # Fuse with IMU for faster curvature response
+        if vehicle_state is not None:
+            _prev_curvature = fuse_curvature_with_imu(_prev_curvature, vehicle_state)
     else:
         sector_ranges = []
 
@@ -249,21 +258,40 @@ def compute_gap_command(
 
     # --- Speed computation ---
     if use_ai_speed and sector_ranges:
-        speed = compute_optimal_speed(
-            max_speed=max_speed,
-            min_speed=min_speed,
-            steering_rad=steering,
-            max_steering=max_steering,
-            projected_clearance=projected_clearance,
-            passage_width=passage_width,
-            curvature=_prev_curvature,
-            prev_speed=_prev_speed,
-            sector_ranges=sector_ranges,
-            ttc_clearance=projected_ttc_clearance,
-            ttc_target_sec=ttc_target_sec,
-            speed_ramp_up=0.35,
-            speed_ramp_down=0.25,
-        )
+        if vehicle_state is not None:
+            # IMU-fused path: faster response, grip-aware
+            speed = compute_optimal_speed_fused(
+                max_speed=max_speed,
+                min_speed=min_speed,
+                steering_rad=steering,
+                max_steering=max_steering,
+                projected_clearance=projected_clearance,
+                passage_width=passage_width,
+                curvature=_prev_curvature,
+                prev_speed=_prev_speed,
+                sector_ranges=sector_ranges,
+                ttc_clearance=projected_ttc_clearance,
+                vehicle_state=vehicle_state,
+                ttc_target_sec=ttc_target_sec,
+                speed_ramp_up=0.35,
+                speed_ramp_down=0.25,
+            )
+        else:
+            speed = compute_optimal_speed(
+                max_speed=max_speed,
+                min_speed=min_speed,
+                steering_rad=steering,
+                max_steering=max_steering,
+                projected_clearance=projected_clearance,
+                passage_width=passage_width,
+                curvature=_prev_curvature,
+                prev_speed=_prev_speed,
+                sector_ranges=sector_ranges,
+                ttc_clearance=projected_ttc_clearance,
+                ttc_target_sec=ttc_target_sec,
+                speed_ramp_up=0.35,
+                speed_ramp_down=0.25,
+            )
     else:
         # Classic heuristic fallback
         steer_factor = 1.0 - 0.45 * abs(steering) / max(max_steering, 1e-6)

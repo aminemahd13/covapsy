@@ -29,7 +29,7 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Imu
 from std_msgs.msg import Bool, Float32, String
 
 from covapsy_nav.mode_rules import DriveCommand, select_mode_command, select_recovery_command
@@ -88,6 +88,7 @@ class ModeControllerNode(Node):
         self.create_subscription(Bool, '/track_learned', self.track_learned_cb, 10)
         self.create_subscription(Bool, '/depth_obstacle', self.depth_obstacle_cb, 10)
         self.create_subscription(Bool, '/wrong_direction', self.wrong_direction_cb, 10)
+        self.create_subscription(Imu, '/imu/data', self.imu_cb, 20)
 
         # Publishers
         self.cmd_pub = self.create_publisher(Twist, self.command_topic, 10)
@@ -104,6 +105,10 @@ class ModeControllerNode(Node):
         self.depth_obstacle = False
         self.wheel_speed = 0.0
         self.track_learned = False
+
+        # IMU state for improved stuck/spin detection
+        self.imu_yaw_rate = 0.0
+        self.imu_lon_accel = 0.0
 
         # Stuck detection & recovery state
         self.stopped_since: float = 0.0
@@ -202,6 +207,10 @@ class ModeControllerNode(Node):
     def wrong_direction_cb(self, msg: Bool):
         self.wrong_direction = bool(msg.data)
 
+    def imu_cb(self, msg: Imu):
+        self.imu_yaw_rate = float(msg.angular_velocity.z)
+        self.imu_lon_accel = float(msg.linear_acceleration.x)
+
     def set_mode(self, new_mode: str, from_external: bool = False):
         """Externally set mode (e.g., from a service or parameter change)."""
         if from_external:
@@ -273,10 +282,17 @@ class ModeControllerNode(Node):
         )
 
         # Stuck detection: car wanted to move but output is zero due to obstacle
-        if self.mode in _ACTIVE_MODES and selected.linear_x == 0.0:
+        # IMU-enhanced: also detect spin (high yaw rate + low speed) and impact
+        stuck_timeout = float(self.get_parameter('stuck_timeout').value)
+        is_spinning = abs(self.imu_yaw_rate) > 1.5 and self.wheel_speed < 0.10
+        is_impact = self.imu_lon_accel < -3.0 and self.wheel_speed < 0.05
+
+        if self.mode in _ACTIVE_MODES and (selected.linear_x == 0.0 or is_spinning or is_impact):
             if self.stopped_since == 0.0:
                 self.stopped_since = now
-            elif (now - self.stopped_since) > float(self.get_parameter('stuck_timeout').value):
+            # Use shorter timeout when IMU confirms stuck condition
+            effective_timeout = stuck_timeout * 0.5 if (is_spinning or is_impact) else stuck_timeout
+            if (now - self.stopped_since) > effective_timeout:
                 self._start_reverse(now)
                 return self._run_reverse(now, 0.02)
         else:

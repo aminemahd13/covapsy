@@ -26,7 +26,7 @@ try:
     import rclpy
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry
-    from sensor_msgs.msg import LaserScan
+    from sensor_msgs.msg import LaserScan, Imu
     from std_msgs.msg import Bool
     from std_msgs.msg import Float32
     from std_msgs.msg import String
@@ -197,6 +197,7 @@ class WebotsRosBridge(Node):
         self.rear_pub = self.create_publisher(Bool, "/rear_obstacle", 10)
         self.status_pub = self.create_publisher(String, "/mcu_status", 10)
         self.camera_steer_pub = self.create_publisher(Float32, "/camera_steering_offset", 10)
+        self.imu_pub = self.create_publisher(Imu, "/imu/data", 20)
         self.create_subscription(Twist, "/cmd_vel", self._cmd_cb, 20)
 
         self.last_cmd_time = time.monotonic()
@@ -205,7 +206,10 @@ class WebotsRosBridge(Node):
         self.last_status_time = 0.0
         self.safe_max_steering_rad = _SAFE_MAX_STEERING_RAD
         self._steering_cap_warned = False
-        self.get_logger().info("Webots ROS2 bridge started")
+        self._prev_speed = 0.0
+        self._prev_yaw = 0.0
+        self._prev_time = time.monotonic()
+        self.get_logger().info("Webots ROS2 bridge started (IMU publisher enabled)")
 
     def _effective_max_steering(self) -> float:
         configured = float(self.get_parameter("max_steering_rad").value)
@@ -312,6 +316,37 @@ class WebotsRosBridge(Node):
         cam_msg = Float32()
         cam_msg.data = steer_offset
         self.camera_steer_pub.publish(cam_msg)
+
+        # IMU data derived from Webots InertialUnit + speed delta
+        cur_time = time.monotonic()
+        dt = max(cur_time - self._prev_time, 0.001)
+        yaw_rate = (yaw - self._prev_yaw) / dt
+        # Wrap yaw_rate for discontinuities at ±π
+        if yaw_rate > math.pi / dt:
+            yaw_rate -= 2.0 * math.pi / dt
+        elif yaw_rate < -math.pi / dt:
+            yaw_rate += 2.0 * math.pi / dt
+
+        lon_accel = (speed_ms - self._prev_speed) / dt
+        # Lateral acceleration ≈ speed × yaw_rate (centripetal)
+        lat_accel = speed_ms * yaw_rate
+
+        imu_msg = Imu()
+        imu_msg.header.stamp = now
+        imu_msg.header.frame_id = base_frame
+        imu_msg.orientation.x = qx
+        imu_msg.orientation.y = qy
+        imu_msg.orientation.z = qz
+        imu_msg.orientation.w = qw
+        imu_msg.angular_velocity.z = yaw_rate
+        imu_msg.linear_acceleration.x = lon_accel
+        imu_msg.linear_acceleration.y = lat_accel
+        imu_msg.linear_acceleration.z = 9.81  # gravity
+        self.imu_pub.publish(imu_msg)
+
+        self._prev_speed = speed_ms
+        self._prev_yaw = yaw
+        self._prev_time = cur_time
 
 
 def main() -> None:
