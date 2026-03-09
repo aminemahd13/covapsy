@@ -676,15 +676,12 @@ def apply_rule_guards(speed_m_s, steering_rad, front_dist, left_clear, right_cle
         if steering_into_wall:
             steer *= 0.45
         speed *= 0.80
-    # Emergency steering amplification: when very close and the gap follower
-    # under-steers due to close/far dilution, bias toward the open side.
-    if front_dist < 0.55:
-        side_diff = left_clear - right_clear
-        if abs(side_diff) > 0.05:
-            bias_sign = 1.0 if side_diff > 0 else -1.0
-            # Only amplify if already steering toward the open side (or nearly straight)
-            if bias_sign * steer >= -0.02:
-                steer = clamp(steer + bias_sign * 0.12, -0.55, 0.55)
+    # Emergency steering amplification: when very close, boost whatever
+    # direction the gap follower already chose (fixes under-steer from
+    # close/far dilution even when left == right clearance).
+    if front_dist < 0.55 and abs(steer) > 0.05:
+        amp = 1.0 + 0.8 * (1.0 - front_dist / 0.55)
+        steer = clamp(steer * amp, -0.55, 0.55)
     if abs(steer) > 0.35 and speed > 1.6:
         speed = 1.6
     return max(0.0, speed), steer
@@ -800,7 +797,7 @@ def escalating_recovery(ranges, recovery_count, last_direction):
 
     elif recovery_count == 1:
         direction = -last_direction if last_direction != 0 else (1 if left_clear > right_clear else -1)
-        steer = direction * REVERSE_STEERING_MAX_RAD
+        steer = direction * MAX_STEERING_RAD
         return REVERSE_SPEED_M_S, steer, REVERSE_STEPS, direction
 
     else:
@@ -1708,7 +1705,7 @@ def run_controller():
         quick_front = front_clearance(ranges)
         if quick_front < 0.55:
             blend_cam = dict(camera_state)
-            blend_cam["confidence"] = blend_cam.get("confidence", 0.0) * 0.25
+            blend_cam["confidence"] = 0.0
             blend_cam["wrong_order"] = False
         else:
             blend_cam = camera_state
