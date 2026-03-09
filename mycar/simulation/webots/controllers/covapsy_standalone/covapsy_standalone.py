@@ -54,10 +54,10 @@ RACE_PROFILE_SPEED_CAPS = {
     "RACE_STABLE": 2.5,
     "RACE_AGGRESSIVE": 3.2,
 }
-DEFAULT_RACE_PROFILE = "RACE_STABLE"
+DEFAULT_RACE_PROFILE = "RACE_AGGRESSIVE"
 DEFAULT_MAX_SPEED_M_S = RACE_PROFILE_SPEED_CAPS[DEFAULT_RACE_PROFILE]
 MAX_SPEED_LIMIT_M_S = RACE_PROFILE_SPEED_CAPS["RACE_AGGRESSIVE"]
-SPEED_RAMP_UP_M_S = 0.030
+SPEED_RAMP_UP_M_S = 0.060
 SPEED_RAMP_DOWN_M_S = 0.10
 REVERSE_SPEED_M_S = -0.55
 REVERSE_STEPS = 28
@@ -108,7 +108,7 @@ CAMERA_DEPTH_BALANCE_RANGE_M = 0.40
 CAMERA_DEPTH_MIN_VALID_M = 0.12
 CAMERA_DEPTH_MAX_VALID_M = 6.0
 CAMERA_ORDER_MIN_SEPARATION_PX = 24
-CAMERA_WRONG_ORDER_SPEED_CAP_M_S = 0.70
+CAMERA_WRONG_ORDER_SPEED_CAP_M_S = 1.10
 CAMERA_WRONG_ORDER_CONFIDENCE = 0.72
 
 # Runtime logging controls
@@ -692,10 +692,10 @@ def run_controller():
                     f"(steer={math.degrees(reverse_steering):.1f} deg)"
                 )
             elif key in (ord("+"), ord("=")):
-                speed_cap = min(MAX_SPEED_LIMIT_M_S, speed_cap + 0.1)
+                speed_cap = min(MAX_SPEED_LIMIT_M_S, speed_cap + 0.2)
                 print(f"[standalone] speed_cap={speed_cap:.2f} m/s")
             elif key in (ord("-"), ord("_")):
-                speed_cap = max(MIN_SPEED_FLOOR_M_S, speed_cap - 0.1)
+                speed_cap = max(MIN_SPEED_FLOOR_M_S, speed_cap - 0.2)
                 print(f"[standalone] speed_cap={speed_cap:.2f} m/s")
             elif key in (ord("L"), ord("l")):
                 logs_enabled = not logs_enabled

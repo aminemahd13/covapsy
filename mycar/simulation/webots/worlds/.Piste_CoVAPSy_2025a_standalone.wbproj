@@ -7,3 +7,5 @@ centralWidgetVisible: 1
 orthographicViewHeight: 1
 textFiles: -1
 consoles: Console:All:All
+renderingDevicePerspectives: TT02_standalone:RealSenseDepth;1;1;0.584044;0.388235
+renderingDevicePerspectives: TT02_standalone:RealSenseRGB;1;1;0.534714;0.0184874
