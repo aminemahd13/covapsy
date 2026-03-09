@@ -676,6 +676,15 @@ def apply_rule_guards(speed_m_s, steering_rad, front_dist, left_clear, right_cle
         if steering_into_wall:
             steer *= 0.45
         speed *= 0.80
+    # Emergency steering amplification: when very close and the gap follower
+    # under-steers due to close/far dilution, bias toward the open side.
+    if front_dist < 0.55:
+        side_diff = left_clear - right_clear
+        if abs(side_diff) > 0.05:
+            bias_sign = 1.0 if side_diff > 0 else -1.0
+            # Only amplify if already steering toward the open side (or nearly straight)
+            if bias_sign * steer >= -0.02:
+                steer = clamp(steer + bias_sign * 0.12, -0.55, 0.55)
     if abs(steer) > 0.35 and speed > 1.6:
         speed = 1.6
     return max(0.0, speed), steer
@@ -1694,7 +1703,16 @@ def run_controller():
             }
 
         # Keep legacy camera blend as additional near-horizon correction.
-        steering = blend_lidar_and_camera_steering(steering, camera_state)
+        # At very close range, camera border detection is unreliable (wall
+        # proximity distorts colour geometry), so attenuate camera influence.
+        quick_front = front_clearance(ranges)
+        if quick_front < 0.55:
+            blend_cam = dict(camera_state)
+            blend_cam["confidence"] = blend_cam.get("confidence", 0.0) * 0.25
+            blend_cam["wrong_order"] = False
+        else:
+            blend_cam = camera_state
+        steering = blend_lidar_and_camera_steering(steering, blend_cam)
 
         # Tactical near/far blend under traffic pressure.
         front_min, left_clear, right_clear, lidar_conf = _scan_metrics(
@@ -1772,9 +1790,12 @@ def run_controller():
         )
 
         # Wrong-direction detection → U-turn trigger
+        # Suppress when very close to a wall: camera colour order is unreliable
+        # at wall proximity and U-turns in tight corners are counter-productive.
         if (
             camera_state["wrong_order"]
             and camera_state["order_confidence"] > UTURN_CONFIDENCE_THRESHOLD
+            and front_min > 0.55
         ):
             wrong_order_counter += 1
             # Slow down while evaluating
