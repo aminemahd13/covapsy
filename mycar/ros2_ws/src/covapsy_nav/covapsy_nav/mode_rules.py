@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 
 @dataclass(frozen=True)
@@ -15,10 +16,14 @@ def select_mode_command(
     mode: str,
     reactive_cmd: DriveCommand,
     pursuit_cmd: DriveCommand,
+    tactical_cmd: DriveCommand | None,
+    tactical_enabled: bool,
     mapping_speed_cap: float,
     min_front_dist: float,
     emergency_stop_distance: float = 0.15,
     pursuit_min_speed: float = 0.01,
+    tactical_min_speed: float = 0.02,
+    tactical_max_abs_steer: float = 0.55,
 ) -> DriveCommand:
     """Select final command from mode state and safety constraints."""
     cmd = DriveCommand()
@@ -37,7 +42,18 @@ def select_mode_command(
             angular_z=float(reactive_cmd.angular_z),
         )
     elif current_mode == "RACING":
-        source = pursuit_cmd if abs(float(pursuit_cmd.linear_x)) > pursuit_min_speed else reactive_cmd
+        tactical_valid = (
+            tactical_enabled
+            and tactical_cmd is not None
+            and math.isfinite(float(tactical_cmd.linear_x))
+            and math.isfinite(float(tactical_cmd.angular_z))
+            and float(tactical_cmd.linear_x) >= tactical_min_speed
+            and abs(float(tactical_cmd.angular_z)) <= tactical_max_abs_steer
+        )
+        if tactical_valid:
+            source = tactical_cmd
+        else:
+            source = pursuit_cmd if abs(float(pursuit_cmd.linear_x)) > pursuit_min_speed else reactive_cmd
         cmd = DriveCommand(
             linear_x=float(source.linear_x),
             angular_z=float(source.angular_z),
@@ -69,4 +85,3 @@ def select_recovery_command(
             return DriveCommand(0.0, 0.0)
         return DriveCommand(linear_x=float(reverse_speed), angular_z=float(reverse_steer))
     return DriveCommand()
-

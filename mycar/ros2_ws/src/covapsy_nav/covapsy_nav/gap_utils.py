@@ -18,6 +18,10 @@ def compute_gap_command(
     disparity_threshold: float,
     steering_gain: float,
     fov_degrees: float = 200.0,
+    prev_steering: float = 0.0,
+    steering_slew_rate: float = 0.07,
+    max_steering: float = 0.5,
+    ttc_target_sec: float = 1.2,
 ) -> tuple[float, float]:
     """Compute (speed_m_s, steering_rad) from filtered scan data."""
     ranges = np.array(ranges_in, dtype=np.float64)
@@ -86,12 +90,28 @@ def compute_gap_command(
     best_idx = best_gap[0] + int(np.argmax(gap_ranges))
     target_angle = float(f_angles[best_idx])
 
-    steering = steering_gain * target_angle
-    steering = max(-0.5, min(0.5, steering))
+    raw_steering = steering_gain * target_angle
+    raw_steering = max(-max_steering, min(max_steering, raw_steering))
+    steering = max(
+        float(prev_steering) - float(steering_slew_rate),
+        min(float(prev_steering) + float(steering_slew_rate), raw_steering),
+    )
 
-    steer_factor = 1.0 - 0.7 * abs(steering) / 0.5
-    dist_factor = min(1.0, nearest_dist / 1.5)
-    speed = min_speed + (max_speed - min_speed) * steer_factor * dist_factor
-    speed = max(min_speed, min(max_speed, speed))
+    steer_factor = 1.0 - 0.7 * abs(steering) / max(max_steering, 1e-6)
+    free_space_factor = min(1.0, nearest_dist / 2.0)
+    speed = min_speed + (max_speed - min_speed) * steer_factor * free_space_factor
+
+    # TTC guard: slow down when projected front time-to-collision is short.
+    speed = max(0.0, min(max_speed, speed))
+    ttc = nearest_dist / max(speed, 0.05)
+    target_ttc = max(float(ttc_target_sec), 0.2)
+    if ttc < target_ttc:
+        speed = min(speed, nearest_dist / target_ttc)
+
+    # Keep low-speed creeping when space is available, allow near-stop in dense traffic.
+    if nearest_dist > 0.35:
+        speed = max(min_speed, speed)
+    else:
+        speed = max(0.0, speed)
+    speed = min(max_speed, speed)
     return float(speed), float(steering)
-

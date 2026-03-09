@@ -31,3 +31,14 @@ def test_gap_command_returns_finite_drive_for_open_track():
     assert 0.5 <= speed <= 2.0
     assert -0.5 <= steering <= 0.5
 
+
+def test_gap_command_applies_steering_slew_limit():
+    ranges = np.full(360, 4.0, dtype=np.float32)
+    speed, steering = compute_gap_command(
+        ranges_in=ranges,
+        prev_steering=0.0,
+        steering_slew_rate=0.03,
+        **_default_kwargs(),
+    )
+    assert 0.0 <= speed <= 2.0
+    assert abs(steering) <= 0.03 + 1e-9

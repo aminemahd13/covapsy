@@ -10,6 +10,7 @@ Top-level controller selecting between driving modes:
 Subscribes:
   /cmd_vel_reactive (Twist)  - from gap_follower_node
   /cmd_vel_pursuit  (Twist)  - from pure_pursuit_node
+  /cmd_vel_tactical (Twist)  - from tactical_race_node
   /race_start       (Bool)   - start signal
   /race_stop        (Bool)   - stop signal
   /scan_filtered    (LaserScan) - for emergency detection
@@ -55,6 +56,8 @@ class ModeControllerNode(Node):
         self.declare_parameter('command_topic', '/cmd_vel')
         self.declare_parameter('allow_runtime_mode_switch', False)
         self.declare_parameter('lock_mode_after_start', True)
+        self.declare_parameter('enable_tactical_ai', False)
+        self.declare_parameter('tactical_timeout', 0.25)
 
         initial_mode = str(self.get_parameter('initial_mode').value).upper()
         self.mode = initial_mode if initial_mode in _VALID_MODES else 'IDLE'
@@ -64,6 +67,7 @@ class ModeControllerNode(Node):
         # Subscriptions
         self.create_subscription(Twist, '/cmd_vel_reactive', self.reactive_cb, 10)
         self.create_subscription(Twist, '/cmd_vel_pursuit', self.pursuit_cb, 10)
+        self.create_subscription(Twist, '/cmd_vel_tactical', self.tactical_cb, 10)
         self.create_subscription(Bool, '/race_start', self.start_cb, 10)
         self.create_subscription(Bool, '/race_stop', self.stop_cb, 10)
         self.create_subscription(LaserScan, '/scan_filtered', self.scan_cb, 10)
@@ -78,6 +82,8 @@ class ModeControllerNode(Node):
         # Drive state
         self.reactive_cmd = Twist()
         self.pursuit_cmd = Twist()
+        self.tactical_cmd = Twist()
+        self.last_tactical_time = 0.0
         self.has_map = False
         self.min_front_dist = float('inf')
         self.rear_blocked = False
@@ -129,6 +135,10 @@ class ModeControllerNode(Node):
 
     def pursuit_cb(self, msg):
         self.pursuit_cmd = msg
+
+    def tactical_cb(self, msg):
+        self.tactical_cmd = msg
+        self.last_tactical_time = time.monotonic()
 
     def scan_cb(self, msg: LaserScan):
         ranges = np.array(msg.ranges, dtype=np.float32)
@@ -191,6 +201,10 @@ class ModeControllerNode(Node):
         self.mode_pub.publish(mode_msg)
 
     def _run_normal(self, now: float) -> DriveCommand:
+        tactical_timeout = float(self.get_parameter('tactical_timeout').value)
+        tactical_enabled = bool(self.get_parameter('enable_tactical_ai').value) and (
+            (now - self.last_tactical_time) <= tactical_timeout
+        )
         selected = select_mode_command(
             mode=self.mode,
             reactive_cmd=DriveCommand(
@@ -201,6 +215,11 @@ class ModeControllerNode(Node):
                 linear_x=float(self.pursuit_cmd.linear.x),
                 angular_z=float(self.pursuit_cmd.angular.z),
             ),
+            tactical_cmd=DriveCommand(
+                linear_x=float(self.tactical_cmd.linear.x),
+                angular_z=float(self.tactical_cmd.angular.z),
+            ),
+            tactical_enabled=tactical_enabled,
             mapping_speed_cap=float(self.get_parameter('mapping_speed_cap').value),
             min_front_dist=float(self.min_front_dist),
         )

@@ -84,3 +84,15 @@ Pass criteria:
 - `IDLE` and `STOPPED` always publish zero on the configured command topic.
 - Runtime `/set_mode` is ignored in competition bringup.
 - LiDAR loss handling: mode controller should not command unsafe motion.
+
+## 6. Setup-Lap Offboard Assist (Optional)
+1. Record setup-lap odometry to CSV (`x,y` columns).
+2. Build path JSON on trackside computer:
+```bash
+python mycar/scripts/build_racing_path_from_csv.py --input setup_laps.csv --output racing_path.json
+```
+3. Publish path before race:
+```bash
+ros2 run covapsy_nav racing_path_publisher_node --ros-args -p path_file:=racing_path.json
+```
+4. Keep race runtime autonomous after start signal (no human behavior commands).

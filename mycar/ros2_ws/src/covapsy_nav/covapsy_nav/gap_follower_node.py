@@ -6,6 +6,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 
 from covapsy_nav.gap_utils import compute_gap_command
+from covapsy_nav.race_profiles import resolve_profile_speed_cap
 
 
 class GapFollowerNode(Node):
@@ -22,26 +23,48 @@ class GapFollowerNode(Node):
         self.declare_parameter("disparity_threshold", 0.5)
         self.declare_parameter("steering_gain", 1.0)
         self.declare_parameter("fov_degrees", 200.0)
+        self.declare_parameter("race_profile", "RACE_STABLE")
+        self.declare_parameter("deployment_mode", "real")
+        self.declare_parameter("max_speed_real_cap", 2.0)
+        self.declare_parameter("max_speed_sim_cap", 2.5)
+        self.declare_parameter("steering_slew_rate", 0.07)
+        self.declare_parameter("max_steering", 0.5)
+        self.declare_parameter("ttc_target_sec", 1.2)
 
         self.create_subscription(LaserScan, "/scan_filtered", self.scan_cb, 10)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel_reactive", 10)
+        self.prev_steering = 0.0
 
         self.get_logger().info("Gap follower node started")
 
     def scan_cb(self, msg: LaserScan):
+        configured_max_speed = float(self.get_parameter("max_speed").value)
+        profile_cap = resolve_profile_speed_cap(
+            race_profile=str(self.get_parameter("race_profile").value),
+            deployment_mode=str(self.get_parameter("deployment_mode").value),
+            max_speed_real_cap=float(self.get_parameter("max_speed_real_cap").value),
+            max_speed_sim_cap=float(self.get_parameter("max_speed_sim_cap").value),
+        )
+        max_speed = min(configured_max_speed, profile_cap)
+
         speed, steering = compute_gap_command(
             ranges_in=msg.ranges,
             angle_min=float(msg.angle_min),
             angle_increment=float(msg.angle_increment),
             car_width=float(self.get_parameter("car_width").value),
-            max_speed=float(self.get_parameter("max_speed").value),
+            max_speed=max_speed,
             min_speed=float(self.get_parameter("min_speed").value),
             max_range=float(self.get_parameter("max_range").value),
             safety_radius=float(self.get_parameter("safety_radius").value),
             disparity_threshold=float(self.get_parameter("disparity_threshold").value),
             steering_gain=float(self.get_parameter("steering_gain").value),
             fov_degrees=float(self.get_parameter("fov_degrees").value),
+            prev_steering=self.prev_steering,
+            steering_slew_rate=float(self.get_parameter("steering_slew_rate").value),
+            max_steering=float(self.get_parameter("max_steering").value),
+            ttc_target_sec=float(self.get_parameter("ttc_target_sec").value),
         )
+        self.prev_steering = steering
 
         cmd = Twist()
         cmd.linear.x = speed

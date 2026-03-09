@@ -80,3 +80,28 @@ Expected:
 - `/cmd_vel_reactive` is non-zero while driving.
 - `/cmd_vel` follows mode controller output.
 - `/mcu_status` contains `backend=webots_ros2;ok=1`.
+
+## Mode C: ROS2 Multi-Car Benchmark (Ubuntu)
+Use this mode to stress-test tactical behavior against other cars.
+
+### 1. Launch ROS2 stack (multi-car tactical profile)
+```bash
+ros2 launch covapsy_bringup sim_webots_multicar.launch.py race_profile:=RACE_STABLE traffic_mode:=balanced
+```
+
+### 2. Start multi-car world
+```bash
+webots mycar/simulation/webots/worlds/Piste_CoVAPSy_2025a_multicar_ros2.wbt
+```
+
+### 3. Tactical checks
+```bash
+ros2 topic hz /cmd_vel_tactical
+ros2 topic echo /opponent_confidence --once
+ros2 topic echo /traffic_state --once
+```
+
+Expected:
+- Ego car (`TT02_ego_ros2`) is ROS2-controlled.
+- Opponent cars run scripted controllers in the same world.
+- `/cmd_vel_tactical` is produced when traffic/opponents are detected.

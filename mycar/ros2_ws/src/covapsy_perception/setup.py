@@ -21,6 +21,7 @@ setup(
         'console_scripts': [
             'scan_filter_node = covapsy_perception.scan_filter_node:main',
             'border_detect_node = covapsy_perception.border_detect_node:main',
+            'opponent_detect_node = covapsy_perception.opponent_detect_node:main',
         ],
     },
 )

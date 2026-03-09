@@ -12,6 +12,12 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("max_speed", default_value="2.0"),
             DeclareLaunchArgument("safety_radius", default_value="0.20"),
+            DeclareLaunchArgument("race_profile", default_value="RACE_STABLE"),
+            DeclareLaunchArgument("deployment_mode", default_value="real"),
+            DeclareLaunchArgument("max_speed_real_cap", default_value="2.0"),
+            DeclareLaunchArgument("max_speed_sim_cap", default_value="2.5"),
+            DeclareLaunchArgument("enable_tactical_ai", default_value="false"),
+            DeclareLaunchArgument("traffic_mode", default_value="balanced"),
             DeclareLaunchArgument("initial_mode", default_value="IDLE"),
             DeclareLaunchArgument("command_topic", default_value="/cmd_vel"),
             DeclareLaunchArgument("allow_runtime_mode_switch", default_value="false"),
@@ -43,6 +49,12 @@ def generate_launch_description():
                         "safety_radius": LaunchConfiguration("safety_radius"),
                         "disparity_threshold": 0.5,
                         "steering_gain": 1.0,
+                        "race_profile": LaunchConfiguration("race_profile"),
+                        "deployment_mode": LaunchConfiguration("deployment_mode"),
+                        "max_speed_real_cap": LaunchConfiguration("max_speed_real_cap"),
+                        "max_speed_sim_cap": LaunchConfiguration("max_speed_sim_cap"),
+                        "steering_slew_rate": 0.07,
+                        "ttc_target_sec": 1.2,
                     }
                 ],
                 output="screen",
@@ -59,6 +71,39 @@ def generate_launch_description():
                         "lookahead_min": 0.5,
                         "lookahead_max": 1.5,
                         "max_speed": 2.5,
+                        "race_profile": LaunchConfiguration("race_profile"),
+                        "deployment_mode": LaunchConfiguration("deployment_mode"),
+                        "max_speed_real_cap": LaunchConfiguration("max_speed_real_cap"),
+                        "max_speed_sim_cap": LaunchConfiguration("max_speed_sim_cap"),
+                        "ttc_target_sec": 1.3,
+                    }
+                ],
+                output="screen",
+            ),
+            Node(
+                package="covapsy_perception",
+                executable="opponent_detect_node",
+                name="opponent_detect",
+                condition=IfCondition(LaunchConfiguration("enable_tactical_ai")),
+                parameters=[
+                    {
+                        "traffic_mode": LaunchConfiguration("traffic_mode"),
+                    }
+                ],
+                output="screen",
+            ),
+            Node(
+                package="covapsy_nav",
+                executable="tactical_race_node",
+                name="tactical_race",
+                condition=IfCondition(LaunchConfiguration("enable_tactical_ai")),
+                parameters=[
+                    {
+                        "race_profile": LaunchConfiguration("race_profile"),
+                        "deployment_mode": LaunchConfiguration("deployment_mode"),
+                        "max_speed_real_cap": LaunchConfiguration("max_speed_real_cap"),
+                        "max_speed_sim_cap": LaunchConfiguration("max_speed_sim_cap"),
+                        "traffic_mode": LaunchConfiguration("traffic_mode"),
                     }
                 ],
                 output="screen",
@@ -80,6 +125,8 @@ def generate_launch_description():
                         "allow_runtime_mode_switch": LaunchConfiguration(
                             "allow_runtime_mode_switch"
                         ),
+                        "enable_tactical_ai": LaunchConfiguration("enable_tactical_ai"),
+                        "tactical_timeout": 0.25,
                         "lock_mode_after_start": True,
                     }
                 ],

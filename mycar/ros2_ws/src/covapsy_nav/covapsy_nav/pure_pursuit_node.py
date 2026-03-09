@@ -14,7 +14,10 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Path, Odometry
+from sensor_msgs.msg import LaserScan
 import numpy as np
+
+from covapsy_nav.race_profiles import resolve_profile_speed_cap
 
 try:
     import tf_transformations
@@ -34,16 +37,26 @@ class PurePursuitNode(Node):
         self.declare_parameter('speed_factor', 0.3)
         self.declare_parameter('max_speed', 2.5)
         self.declare_parameter('max_steering', 0.4)
+        self.declare_parameter('steering_slew_rate', 0.08)
+        self.declare_parameter('ttc_target_sec', 1.3)
+        self.declare_parameter('race_profile', 'RACE_STABLE')
+        self.declare_parameter('deployment_mode', 'real')
+        self.declare_parameter('max_speed_real_cap', 2.0)
+        self.declare_parameter('max_speed_sim_cap', 2.5)
 
         self.path_sub = self.create_subscription(
             Path, '/racing_path', self.path_cb, 10)
         self.odom_sub = self.create_subscription(
             Odometry, '/odom', self.odom_cb, 10)
+        self.scan_sub = self.create_subscription(
+            LaserScan, '/scan_filtered', self.scan_cb, 10)
         self.cmd_pub = self.create_publisher(
             Twist, '/cmd_vel_pursuit', 10)
 
         self.path = None
         self.current_pose = None
+        self.min_front_dist = float('inf')
+        self.prev_steering = 0.0
         self.create_timer(0.05, self.control_loop)  # 20 Hz
 
         if not TF_AVAILABLE:
@@ -63,6 +76,15 @@ class PurePursuitNode(Node):
     def odom_cb(self, msg: Odometry):
         self.current_pose = msg.pose.pose
 
+    def scan_cb(self, msg: LaserScan):
+        ranges = np.array(msg.ranges, dtype=np.float32)
+        if ranges.size == 0:
+            return
+        ranges = ranges[np.isfinite(ranges)]
+        if ranges.size == 0:
+            return
+        self.min_front_dist = float(np.min(ranges))
+
     def control_loop(self):
         if self.path is None or self.current_pose is None or len(self.path) < 2:
             return
@@ -71,7 +93,16 @@ class PurePursuitNode(Node):
         ld_min = self.get_parameter('lookahead_min').value
         ld_max = self.get_parameter('lookahead_max').value
         speed_factor = self.get_parameter('speed_factor').value
-        max_speed = self.get_parameter('max_speed').value
+        configured_max_speed = self.get_parameter('max_speed').value
+        max_speed = min(
+            configured_max_speed,
+            resolve_profile_speed_cap(
+                race_profile=str(self.get_parameter('race_profile').value),
+                deployment_mode=str(self.get_parameter('deployment_mode').value),
+                max_speed_real_cap=float(self.get_parameter('max_speed_real_cap').value),
+                max_speed_sim_cap=float(self.get_parameter('max_speed_sim_cap').value),
+            ),
+        )
         max_steer = self.get_parameter('max_steering').value
 
         # Current state
@@ -117,10 +148,22 @@ class PurePursuitNode(Node):
         curvature = 2.0 * local_y / dist_sq
         steering = math.atan(L * curvature)
         steering = max(-max_steer, min(max_steer, steering))
+        slew_rate = float(self.get_parameter('steering_slew_rate').value)
+        steering = max(self.prev_steering - slew_rate, min(self.prev_steering + slew_rate, steering))
+        self.prev_steering = steering
 
-        # Speed: inversely proportional to curvature
-        speed = max_speed * (1.0 - 0.7 * abs(steering) / max_steer)
-        speed = max(0.3, speed)
+        # Speed: curvature + front free-space + TTC constrained.
+        curvature_factor = 1.0 - 0.7 * abs(steering) / max(max_steer, 1e-6)
+        free_space_factor = min(1.0, self.min_front_dist / 2.0)
+        speed = max_speed * curvature_factor * free_space_factor
+        speed = max(0.0, speed)
+        ttc_target = max(float(self.get_parameter('ttc_target_sec').value), 0.2)
+        ttc = self.min_front_dist / max(speed, 0.05)
+        if ttc < ttc_target:
+            speed = min(speed, self.min_front_dist / ttc_target)
+        if self.min_front_dist > 0.8:
+            speed = max(0.3, speed)
+        speed = min(max_speed, speed)
 
         cmd = Twist()
         cmd.linear.x = float(speed)

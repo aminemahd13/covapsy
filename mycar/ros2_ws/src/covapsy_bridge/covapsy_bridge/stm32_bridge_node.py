@@ -23,6 +23,7 @@ from covapsy_bridge.race_control import RaceControlPolicy
 from covapsy_bridge.race_control import RaceControlState
 from covapsy_bridge.race_control import apply_race_signal
 from covapsy_bridge.race_control import race_command_allowed
+from covapsy_bridge.race_profiles import resolve_profile_speed_cap
 
 
 class STM32BridgeNode(Node):
@@ -37,6 +38,10 @@ class STM32BridgeNode(Node):
         self.declare_parameter("max_steering_deg", 18.0)
         self.declare_parameter("max_speed_fwd", 2.0)
         self.declare_parameter("max_speed_rev", -4.0)
+        self.declare_parameter("race_profile", "RACE_STABLE")
+        self.declare_parameter("deployment_mode", "real")
+        self.declare_parameter("max_speed_real_cap", 2.0)
+        self.declare_parameter("max_speed_sim_cap", 2.5)
         self.declare_parameter("cmd_topic", "/cmd_vel")
         self.declare_parameter("competition_mode", True)
         self.declare_parameter("require_start_signal", True)
@@ -94,9 +99,17 @@ class STM32BridgeNode(Node):
         self.rear_pub = self.create_publisher(Bool, "/rear_obstacle", 10)
         self.status_pub = self.create_publisher(String, "/mcu_status", 10)
 
+        profile_speed_cap = resolve_profile_speed_cap(
+            race_profile=str(self.get_parameter("race_profile").value),
+            deployment_mode=str(self.get_parameter("deployment_mode").value),
+            max_speed_real_cap=float(self.get_parameter("max_speed_real_cap").value),
+            max_speed_sim_cap=float(self.get_parameter("max_speed_sim_cap").value),
+        )
+        max_speed_fwd = min(float(self.get_parameter("max_speed_fwd").value), profile_speed_cap)
+
         self.limits = DriveLimits(
             max_steering_deg=float(self.get_parameter("max_steering_deg").value),
-            max_speed_fwd=float(self.get_parameter("max_speed_fwd").value),
+            max_speed_fwd=max_speed_fwd,
             max_speed_rev=float(self.get_parameter("max_speed_rev").value),
         )
         self.pwm_cal = PwmCalibration(
@@ -129,7 +142,8 @@ class STM32BridgeNode(Node):
 
         self.get_logger().info(
             f"STM32 bridge started with backend='{self.backend}' "
-            f"(cmd_topic='{self.cmd_topic}', competition_mode={self.race_policy.competition_mode})"
+            f"(cmd_topic='{self.cmd_topic}', competition_mode={self.race_policy.competition_mode}, "
+            f"profile_cap={profile_speed_cap:.2f}m/s)"
         )
         if self.race_policy.competition_mode and self.race_policy.require_start_signal:
             self.get_logger().info("Drive commands are gated until /race_start=true")

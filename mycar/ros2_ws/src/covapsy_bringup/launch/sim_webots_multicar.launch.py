@@ -1,4 +1,4 @@
-"""Bringup for ROS2-in-the-loop Webots simulation."""
+"""Bringup for ROS2 multi-car Webots benchmark simulation."""
 
 import os
 

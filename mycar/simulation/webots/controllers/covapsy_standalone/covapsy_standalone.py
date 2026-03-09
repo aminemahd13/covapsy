@@ -38,9 +38,15 @@ DISPARITY_THRESHOLD_M = 0.30
 SAFETY_RADIUS_M = 0.22
 MIN_SPEED_FLOOR_M_S = 0.10
 BASE_MIN_SPEED_M_S = 0.24
-DEFAULT_MAX_SPEED_M_S = 0.95
-MAX_SPEED_LIMIT_M_S = 4.00
-SPEED_RAMP_UP_M_S = 0.010
+RACE_PROFILE_SPEED_CAPS = {
+    "HOMOLOGATION": 0.8,
+    "RACE_STABLE": 2.5,
+    "RACE_AGGRESSIVE": 3.2,
+}
+DEFAULT_RACE_PROFILE = "RACE_STABLE"
+DEFAULT_MAX_SPEED_M_S = RACE_PROFILE_SPEED_CAPS[DEFAULT_RACE_PROFILE]
+MAX_SPEED_LIMIT_M_S = RACE_PROFILE_SPEED_CAPS["RACE_AGGRESSIVE"]
+SPEED_RAMP_UP_M_S = 0.030
 SPEED_RAMP_DOWN_M_S = 0.10
 REVERSE_SPEED_M_S = -0.55
 REVERSE_STEPS = 24
@@ -316,6 +322,7 @@ def run_controller():
     print("COVAPSY Standalone Webots Controller")
     print("No ROS required. Click the 3D window then use:")
     print("  A=start  N=stop  S=algo toggle  R=reverse  +/- speed cap")
+    print(f"Active speed profile: {DEFAULT_RACE_PROFILE} (cap={speed_cap:.2f} m/s)")
     print("=" * 64)
 
     set_drive_command(driver, 0.0, 0.0)

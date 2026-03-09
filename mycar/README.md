@@ -64,6 +64,12 @@ Start Webots from the same sourced terminal:
 webots mycar/simulation/webots/worlds/Piste_CoVAPSy_2025a_ros2.wbt
 ```
 
+Multi-car tactical benchmark:
+```bash
+ros2 launch covapsy_bringup sim_webots_multicar.launch.py race_profile:=RACE_STABLE traffic_mode:=balanced
+webots mycar/simulation/webots/worlds/Piste_CoVAPSy_2025a_multicar_ros2.wbt
+```
+
 Expected checks:
 ```bash
 ros2 topic hz /scan            # ~10 Hz or Webots lidar rate

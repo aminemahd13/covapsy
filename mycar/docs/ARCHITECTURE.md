@@ -7,8 +7,9 @@ Core runtime chain:
 1. `/scan` -> `scan_filter_node` -> `/scan_filtered`
 2. `/scan_filtered` -> `gap_follower_node` -> `/cmd_vel_reactive`
 3. Optional `/racing_path` + `/odom` -> `pure_pursuit_node` -> `/cmd_vel_pursuit`
-4. `mode_controller_node` selects final command on configurable `command_topic`
-5. Real car: `/cmd_vel_autonomy` -> `stm32_bridge_node`; simulation: `/cmd_vel` -> Webots bridge
+4. `/scan_filtered` + `/odom` + planner commands -> `tactical_race_node` -> `/cmd_vel_tactical`
+5. `mode_controller_node` selects final command on configurable `command_topic`
+6. Real car: `/cmd_vel_autonomy` -> `stm32_bridge_node`; simulation: `/cmd_vel` -> Webots bridge
 
 ## Topic Contract
 | Topic | Type | Producer | Consumer |
@@ -17,10 +18,13 @@ Core runtime chain:
 | `/scan_filtered` | `sensor_msgs/LaserScan` | `scan_filter_node` | `gap_follower_node`, `slam_toolbox` |
 | `/cmd_vel_reactive` | `geometry_msgs/Twist` | `gap_follower_node` | `mode_controller_node` |
 | `/cmd_vel_pursuit` | `geometry_msgs/Twist` | `pure_pursuit_node` | `mode_controller_node` |
+| `/cmd_vel_tactical` | `geometry_msgs/Twist` | `tactical_race_node` | `mode_controller_node` |
 | `/cmd_vel_autonomy` | `geometry_msgs/Twist` | `mode_controller_node` (real-car bringup) | `stm32_bridge_node` |
 | `/cmd_vel` | `geometry_msgs/Twist` | `mode_controller_node` (simulation bringup) | `covapsy_ros2_bridge` |
 | `/wheel_speed` | `std_msgs/Float32` | bridge node / sim bridge | `tft_status_node`, monitoring |
 | `/rear_obstacle` | `std_msgs/Bool` | bridge node / sim bridge | `gap_follower_node` |
+| `/opponent_confidence` | `std_msgs/Float32` | `opponent_detect_node` | `tactical_race_node` |
+| `/traffic_state` | `std_msgs/String` | `opponent_detect_node` | monitoring |
 | `/mcu_status` | `std_msgs/String` | bridge node / sim bridge | monitoring |
 | `/car_mode` | `std_msgs/String` | `mode_controller_node` | `tft_status_node`, monitoring |
 | `/odom` | `nav_msgs/Odometry` | sim bridge (GPS/IMU) or localization (real) | `pure_pursuit_node` |

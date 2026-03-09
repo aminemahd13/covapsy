@@ -22,6 +22,8 @@ setup(
             'gap_follower_node = covapsy_nav.gap_follower_node:main',
             'pure_pursuit_node = covapsy_nav.pure_pursuit_node:main',
             'mode_controller_node = covapsy_nav.mode_controller_node:main',
+            'tactical_race_node = covapsy_nav.tactical_race_node:main',
+            'racing_path_publisher_node = covapsy_nav.racing_path_publisher_node:main',
         ],
     },
 )
