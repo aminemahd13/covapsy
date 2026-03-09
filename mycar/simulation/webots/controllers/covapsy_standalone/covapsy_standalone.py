@@ -200,7 +200,6 @@ CURVATURE_TRIGGER_RATIO = 0.55
 RECOVERY_ESCALATION_WINDOW_STEPS = 300  # ~9.6 seconds at 32ms
 REVERSE_STEPS_LONG = 45
 REVERSE_SPEED_HARD_M_S = -0.70
-POST_RECOVERY_OVERRIDE_STEPS = 8  # ticks to force counter-steer after recovery
 
 # Camera guidance knobs (color + depth)
 RGB_CAMERA_CANDIDATES = ("RealSenseRGB", "RGB_camera", "camera")
@@ -787,17 +786,12 @@ def escalating_recovery(ranges, recovery_count, last_direction):
 
     if recovery_count == 0:
         steer = compute_reverse_steering(ranges)
-        # Use full lock when really close to the wall for more effective escape
-        if min(left_clear, right_clear) < 0.35:
-            direction = 1 if left_clear > right_clear else -1
-            steer = direction * MAX_STEERING_RAD
-        else:
-            direction = 1 if steer > 0 else -1
+        direction = 1 if steer > 0 else -1
         return REVERSE_SPEED_M_S, steer, REVERSE_STEPS, direction
 
     elif recovery_count == 1:
         direction = -last_direction if last_direction != 0 else (1 if left_clear > right_clear else -1)
-        steer = direction * MAX_STEERING_RAD
+        steer = direction * REVERSE_STEERING_MAX_RAD
         return REVERSE_SPEED_M_S, steer, REVERSE_STEPS, direction
 
     else:
@@ -1424,8 +1418,6 @@ def run_controller():
     recovery_count = 0
     recovery_cooldown = 0
     last_recovery_direction = 0
-    post_recovery_ticks = 0
-    post_recovery_steer_sign = 0
     speed_cap = DEFAULT_MAX_SPEED_M_S
     smoothed_speed = 0.0
     prev_steering = 0.0
@@ -1592,10 +1584,6 @@ def run_controller():
             low_speed_stall_counter = 0
             prev_steering = reverse_steering
             set_drive_command(driver, reverse_steering, reverse_speed_current)
-            if reverse_ticks == 0:
-                # Activate post-recovery steering override
-                post_recovery_ticks = POST_RECOVERY_OVERRIDE_STEPS
-                post_recovery_steer_sign = -last_recovery_direction if last_recovery_direction != 0 else 0
             continue
 
         # ---- U-turn maneuver execution ----
@@ -1820,15 +1808,6 @@ def run_controller():
         steering = stabilize_steering_command(steering, prev_steering, front_dist)
         prev_steering = steering
 
-        # Post-recovery steering override: bias away from the wall for a few ticks
-        if post_recovery_ticks > 0:
-            post_recovery_ticks -= 1
-            override_mag = MAX_STEERING_RAD * 0.6  # moderate counter-steer
-            steering = clamp(
-                steering + post_recovery_steer_sign * override_mag,
-                -MAX_STEERING_RAD, MAX_STEERING_RAD,
-            )
-
         if target_speed > smoothed_speed:
             smoothed_speed = min(target_speed, smoothed_speed + SPEED_RAMP_UP_M_S)
         else:
@@ -1855,19 +1834,9 @@ def run_controller():
         else:
             low_speed_stall_counter = max(0, low_speed_stall_counter - 1)
 
-        # Rapid re-stall: if still stuck right after recovery, escalate immediately
-        rapid_restall = (
-            post_recovery_ticks == 0
-            and recovery_cooldown > (RECOVERY_ESCALATION_WINDOW_STEPS - POST_RECOVERY_OVERRIDE_STEPS - 5)
-            and front_dist < 0.35
-            and actual_speed is not None
-            and actual_speed < 0.08
-        )
-
         if (
             no_progress_counter >= NO_PROGRESS_TRIGGER_STEPS
             or low_speed_stall_counter >= EARLY_STALL_TRIGGER_STEPS
-            or rapid_restall
         ):
             rev_speed, rev_steer, rev_duration, rev_dir = escalating_recovery(
                 ranges, recovery_count, last_recovery_direction

@@ -339,8 +339,22 @@ def test_curvature_speed_limit_curve():
     assert result < cap
 
 
+def test_escalating_recovery_strategy_zero_keeps_computed_steer_near_wall(monkeypatch):
+    """Strategy 0 should keep compute_reverse_steering output, even near walls."""
+    ranges = make_ranges()
+    set_sector(ranges, 40, 80, 0.20)   # left side close
+    set_sector(ranges, -80, -40, 1.20)  # right side open
+
+    monkeypatch.setattr(covapsy_standalone, "compute_reverse_steering", lambda _ranges: 0.20)
+
+    _speed, steer_0, _dur_0, dir_0 = covapsy_standalone.escalating_recovery(ranges, 0, 0)
+
+    assert math.isclose(steer_0, 0.20, rel_tol=0.0, abs_tol=1e-12)
+    assert dir_0 == 1
+
+
 def test_escalating_recovery_alternates_direction():
-    """Consecutive recoveries should alternate steering direction and escalate."""
+    """Consecutive recoveries should alternate direction and escalate steering cap."""
     ranges = make_ranges()
     set_sector(ranges, -10, 10, 0.20)
 
@@ -351,6 +365,10 @@ def test_escalating_recovery_alternates_direction():
     # Direction alternates
     assert dir_1 == -dir_0
     assert dir_2 == -dir_1
+    # Strategy 1 uses REVERSE_STEERING_MAX_RAD (not full lock)
+    assert math.isclose(abs(steer_1), covapsy_standalone.REVERSE_STEERING_MAX_RAD, rel_tol=0.0, abs_tol=1e-12)
+    # Strategy 2+ remains full lock fallback
+    assert math.isclose(abs(steer_2), covapsy_standalone.MAX_STEERING_RAD, rel_tol=0.0, abs_tol=1e-12)
     # Duration escalates at strategy 2
     assert dur_2 > dur_0
     # All have non-zero steering
