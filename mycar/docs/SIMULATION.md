@@ -93,8 +93,11 @@ ros2 launch covapsy_bringup sim_webots.launch.py enable_runtime_logs:=true runti
 ```
 
 Default behavior:
-- `initial_mode=REACTIVE`
-- pure pursuit disabled (`enable_pure_pursuit:=false`)
+- `initial_mode=LEARNING`
+- `start_mode=LEARNING`
+- track learning enabled (`enable_track_learning:=true`)
+- pure pursuit enabled (`enable_pure_pursuit:=true`)
+- auto handoff to `RACING` when `/track_learned=true`
 - no hardware bridge node
 
 ### 3. Start Webots world
@@ -113,11 +116,21 @@ ros2 topic echo /car_mode --once
 ros2 topic echo /mcu_status --once
 ```
 
+Watch learning -> racing transition:
+```bash
+ros2 topic echo /car_mode
+ros2 topic echo /track_learned
+ros2 topic hz /cmd_vel_pursuit
+ros2 topic echo /wrong_direction_confidence --once
+```
+
 Expected:
 - `/scan` and `/scan_filtered` publish continuously.
-- `/cmd_vel_reactive` is non-zero while driving.
+- `/cmd_vel_reactive` is non-zero during learning.
 - `/cmd_vel` follows mode controller output.
 - `/mcu_status` contains `backend=webots_ros2;ok=1`.
+- `/car_mode` transitions from `LEARNING` to `RACING` once track learning completes.
+- `/race_stop` puts controller in `STOPPED` (latched in competition-style defaults); restart launch for a new run.
 
 ## Mode C: ROS2 Multi-Car Benchmark (Ubuntu)
 Use this mode to stress-test tactical behavior against other cars.
@@ -149,3 +162,7 @@ Expected:
 - Ego car (`TT02_ego_ros2`) is ROS2-controlled.
 - Opponent cars run scripted controllers in the same world.
 - `/cmd_vel_tactical` is produced when traffic/opponents are detected.
+
+## Learning-to-Racing Operator Flow
+For the complete simulation + real-car operator runbook (including restart cycles and debug-only forced mode switching), see:
+- [Operations Runbook](OPERATIONS.md)

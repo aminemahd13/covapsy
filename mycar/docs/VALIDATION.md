@@ -36,16 +36,21 @@ webots mycar/simulation/webots/worlds/Piste_CoVAPSy_2025a_ros2.wbt
 ros2 topic hz /scan
 ros2 topic hz /scan_filtered
 ros2 topic hz /cmd_vel_reactive
+ros2 topic hz /cmd_vel_pursuit
 ros2 topic hz /cmd_vel
 ros2 topic echo /odom --once
 ros2 topic echo /mcu_status --once
+ros2 topic echo /car_mode
+ros2 topic echo /track_learned
 ```
 
 Pass criteria:
 - all required topics present
-- reactive command generated
+- reactive command generated in `LEARNING`
+- `/track_learned` published after required setup lap(s)
+- mode transition to `RACING` observed on `/car_mode`
 - final `/cmd_vel` published continuously
-- one clean autonomous lap in `REACTIVE` mode
+- one clean autonomous lap after handoff to `RACING` mode
 
 ## 4. Real-Car Smoke Test (Per Backend)
 For each backend (`spi`, `uart`, `pi_pwm`):
@@ -80,6 +85,11 @@ ros2 topic echo /mcu_status --once
 ros2 param set /runtime_monitor enable_logs true
 ros2 param set /runtime_monitor enable_logs false
 ```
+9. Verify learning -> racing transition on full bringup:
+```bash
+ros2 topic echo /car_mode
+ros2 topic echo /track_learned
+```
 
 Pass criteria:
 - backend initializes without errors
@@ -87,6 +97,7 @@ Pass criteria:
 - stale command triggers stop
 - `/race_stop` immediately forces zero output
 - status includes `race_running` and `stop_latched` fields
+- on full bringup, mode transitions `IDLE -> LEARNING -> RACING`
 
 ## 5. Safety Regression Checks
 - Remote stop transitions to `STOPPED`.

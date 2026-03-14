@@ -70,6 +70,17 @@ ros2 launch covapsy_bringup sim_webots_multicar.launch.py race_profile:=RACE_STA
 webots mycar/simulation/webots/worlds/Piste_CoVAPSy_2025a_multicar_ros2.wbt
 ```
 
+Learning -> racing transition in simulation (default):
+- starts in `LEARNING` (`initial_mode:=LEARNING`)
+- learns track (`track_learning_required_laps:=1`)
+- auto-switches to `RACING` after `/track_learned` + handoff confirmation
+
+Monitor:
+```bash
+ros2 topic echo /car_mode
+ros2 topic echo /track_learned
+```
+
 Expected checks:
 ```bash
 ros2 topic hz /scan            # ~10 Hz or Webots lidar rate
@@ -115,6 +126,19 @@ ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
 ros2 topic pub /race_stop std_msgs/msg/Bool "{data: true}" --once
 ```
 In competition defaults, bridge motion input is `/cmd_vel_autonomy` and runtime `/set_mode` is disabled.
+`/race_stop` is treated as latched stop in competition-style runs; start a new launch session for the next run.
+
+Learning -> racing transition on real car (`car_full.launch.py` default):
+- pre-start mode is `IDLE`
+- `/race_start` moves to `LEARNING`
+- after setup laps (`track_learning_required_laps:=2`) it auto-switches to `RACING`
+
+Monitor:
+```bash
+ros2 topic echo /car_mode
+ros2 topic echo /track_learned
+ros2 topic echo /mcu_status --once
+```
 
 ## Backends
 - `spi` (default): Pi master SPI <-> STM32 slave, STM32 generates PWM.
@@ -130,6 +154,7 @@ In competition defaults, bridge motion input is `/cmd_vel_autonomy` and runtime 
 ## Documentation
 - [Architecture](docs/ARCHITECTURE.md)
 - [Simulation](docs/SIMULATION.md)
+- [Operations Runbook (Learning -> Racing)](docs/OPERATIONS.md)
 - [STM32 Firmware Setup](docs/STM32_FIRMWARE.md)
 - [Pi 5 Setup](docs/PI5_SETUP.md)
 - [HAT Jumpers](docs/HAT_JUMPERS.md)

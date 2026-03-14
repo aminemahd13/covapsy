@@ -73,6 +73,20 @@ Competition control signals:
 ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
 ros2 topic pub /race_stop std_msgs/msg/Bool "{data: true}" --once
 ```
+In competition defaults, stop is latched; relaunch for a fresh run after `/race_stop`.
+
+Default learning -> racing behavior in `car_full.launch.py`:
+- starts in `IDLE`
+- `/race_start` switches to `LEARNING`
+- track learning runs for required setup laps (`track_learning_required_laps:=2`)
+- auto-switch to `RACING` after `/track_learned=true` and handoff confirm delay
+
+Monitor:
+```bash
+ros2 topic echo /car_mode
+ros2 topic echo /track_learned
+ros2 topic echo /mcu_status --once
+```
 
 Backend switch examples:
 ```bash
@@ -93,3 +107,6 @@ Expected:
 - `/scan` is stable at LiDAR rate.
 - `/mcu_status` includes selected backend and no init error.
 - `/car_mode` matches requested initial mode and transitions on start/stop topics.
+
+Complete operator procedure:
+- [Operations Runbook](OPERATIONS.md)

@@ -49,6 +49,34 @@ ros2 topic echo /mcu_status --once
 ```
 5. Verify jumper routing matches backend selection.
 
+### Stays in `LEARNING` and never reaches `RACING`
+1. Confirm track learner is enabled (`enable_track_learning:=true` in launch).
+2. Check learning completion signal:
+```bash
+ros2 topic echo /track_learned
+```
+3. Check odometry stream exists:
+```bash
+ros2 topic echo /odom --once
+```
+4. Check current mode stream:
+```bash
+ros2 topic echo /car_mode
+```
+5. Verify required lap count is achievable for your run:
+- simulation default `track_learning_required_laps:=1`
+- real-car full default `track_learning_required_laps:=2`
+
+### Unexpected mode switching behavior
+- Competition bringups disable runtime `/set_mode` by default.
+- For debug-only runtime forcing, launch with `allow_runtime_mode_switch:=true`.
+- In competition runs, use only `/race_start` and `/race_stop`.
+
+### `/race_start` ignored after `/race_stop`
+- In competition-style defaults, stop is latched.
+- `mode_controller` remains in `STOPPED` and bridge keeps stop latch active.
+- Start a new launch session for the next run.
+
 ### `spi` backend unstable or no response
 1. Ensure `dtparam=spi=on`.
 2. Verify `spi_bus`/`spi_device`.
