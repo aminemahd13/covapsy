@@ -12,6 +12,79 @@ class DriveCommand:
     angular_z: float = 0.0
 
 
+def should_trigger_wall_deadlock(
+    mode_active: bool,
+    has_recent_scan: bool,
+    has_recent_reactive: bool,
+    min_front_dist: float,
+    stuck_front_blocked_dist: float,
+    left_clearance: float,
+    right_clearance: float,
+    stuck_side_blocked_dist: float,
+    stuck_side_asymmetry_min: float,
+    reactive_steer: float,
+    stuck_front_blocked_steer_min: float,
+    speed_known: bool,
+    actual_speed: float,
+    stuck_actual_speed_max: float,
+    selected_linear_x: float,
+    stuck_cmd_speed_min: float,
+) -> bool:
+    """Return True when wall contact causes zero-speed deadlock."""
+    if not mode_active or not has_recent_scan or not has_recent_reactive:
+        return False
+    if not math.isfinite(float(reactive_steer)):
+        return False
+
+    front_blocked = (
+        math.isfinite(float(min_front_dist))
+        and float(min_front_dist) <= float(stuck_front_blocked_dist)
+    )
+    side_min = min(float(left_clearance), float(right_clearance))
+    side_asym = abs(float(left_clearance) - float(right_clearance))
+    side_blocked = (
+        math.isfinite(side_min)
+        and side_min <= float(stuck_side_blocked_dist)
+        and side_asym >= float(stuck_side_asymmetry_min)
+    )
+    has_contact = front_blocked or side_blocked
+
+    steer_intent = abs(float(reactive_steer)) >= float(stuck_front_blocked_steer_min)
+    selected_stopped = float(selected_linear_x) <= float(stuck_cmd_speed_min)
+    if not (has_contact and steer_intent and selected_stopped):
+        return False
+
+    # If speed telemetry is unknown/stale, allow recovery to avoid permanent deadlock.
+    if not speed_known:
+        return True
+    if not math.isfinite(float(actual_speed)):
+        return False
+    return float(actual_speed) < float(stuck_actual_speed_max)
+
+
+def select_recovery_timeout(
+    stuck_timeout: float,
+    stuck_imu_timeout_factor: float,
+    stuck_front_blocked_timeout_factor: float,
+    stuck_deadlock_unknown_speed_timeout_factor: float,
+    is_spinning: bool,
+    is_impact: bool,
+    wall_deadlock: bool,
+    speed_known: bool,
+) -> float:
+    """Select recovery timeout while preserving trigger precedence."""
+    base_timeout = max(0.01, float(stuck_timeout))
+    if is_spinning or is_impact:
+        factor = float(stuck_imu_timeout_factor)
+    elif wall_deadlock and speed_known:
+        factor = float(stuck_front_blocked_timeout_factor)
+    elif wall_deadlock and not speed_known:
+        factor = float(stuck_deadlock_unknown_speed_timeout_factor)
+    else:
+        factor = 1.0
+    return base_timeout * max(0.05, factor)
+
+
 def select_mode_command(
     mode: str,
     reactive_cmd: DriveCommand,

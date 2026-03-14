@@ -1,6 +1,8 @@
 from covapsy_nav.mode_rules import DriveCommand
+from covapsy_nav.mode_rules import select_recovery_timeout
 from covapsy_nav.mode_rules import select_mode_command
 from covapsy_nav.mode_rules import select_recovery_command
+from covapsy_nav.mode_rules import should_trigger_wall_deadlock
 
 
 def _call(mode, reactive, pursuit, mapping_speed_cap=0.5, min_front_dist=10.0, tactical=None, tactical_enabled=False):
@@ -12,6 +14,27 @@ def _call(mode, reactive, pursuit, mapping_speed_cap=0.5, min_front_dist=10.0, t
         tactical_enabled=tactical_enabled,
         mapping_speed_cap=mapping_speed_cap,
         min_front_dist=min_front_dist,
+    )
+
+
+def _wall_deadlock_kwargs():
+    return dict(
+        mode_active=True,
+        has_recent_scan=True,
+        has_recent_reactive=True,
+        min_front_dist=0.20,
+        stuck_front_blocked_dist=0.22,
+        left_clearance=0.60,
+        right_clearance=0.55,
+        stuck_side_blocked_dist=0.20,
+        stuck_side_asymmetry_min=0.12,
+        reactive_steer=0.10,
+        stuck_front_blocked_steer_min=0.08,
+        speed_known=True,
+        actual_speed=0.02,
+        stuck_actual_speed_max=0.06,
+        selected_linear_x=0.0,
+        stuck_cmd_speed_min=0.08,
     )
 
 
@@ -110,3 +133,59 @@ def test_recovery_invalid_phase_returns_zero():
         rear_blocked=False,
     )
     assert cmd == DriveCommand()
+
+
+def test_front_deadlock_triggers_when_wall_blocked_and_stopped():
+    assert should_trigger_wall_deadlock(**_wall_deadlock_kwargs())
+
+
+def test_side_deadlock_left_triggers_when_side_is_jammed():
+    kwargs = _wall_deadlock_kwargs()
+    kwargs["min_front_dist"] = 0.35
+    kwargs["left_clearance"] = 0.15
+    kwargs["right_clearance"] = 0.45
+    assert should_trigger_wall_deadlock(**kwargs)
+
+
+def test_side_deadlock_right_triggers_when_side_is_jammed():
+    kwargs = _wall_deadlock_kwargs()
+    kwargs["min_front_dist"] = 0.35
+    kwargs["left_clearance"] = 0.48
+    kwargs["right_clearance"] = 0.14
+    assert should_trigger_wall_deadlock(**kwargs)
+
+
+def test_deadlock_triggers_with_unknown_speed_when_command_stopped():
+    kwargs = _wall_deadlock_kwargs()
+    kwargs["speed_known"] = False
+    kwargs["actual_speed"] = 1.0
+    assert should_trigger_wall_deadlock(**kwargs)
+
+
+def test_deadlock_does_not_trigger_with_unknown_speed_if_command_is_forward():
+    kwargs = _wall_deadlock_kwargs()
+    kwargs["speed_known"] = False
+    kwargs["selected_linear_x"] = 0.20
+    assert not should_trigger_wall_deadlock(**kwargs)
+
+
+def test_deadlock_does_not_trigger_in_narrow_symmetric_corridor():
+    kwargs = _wall_deadlock_kwargs()
+    kwargs["min_front_dist"] = 0.50
+    kwargs["left_clearance"] = 0.18
+    kwargs["right_clearance"] = 0.19
+    assert not should_trigger_wall_deadlock(**kwargs)
+
+
+def test_recovery_timeout_prioritizes_spin_over_deadlock():
+    timeout = select_recovery_timeout(
+        stuck_timeout=0.8,
+        stuck_imu_timeout_factor=0.4,
+        stuck_front_blocked_timeout_factor=0.65,
+        stuck_deadlock_unknown_speed_timeout_factor=1.20,
+        is_spinning=True,
+        is_impact=False,
+        wall_deadlock=True,
+        speed_known=False,
+    )
+    assert abs(timeout - (0.8 * 0.4)) < 1e-9

@@ -38,6 +38,15 @@ def generate_launch_description():
             DeclareLaunchArgument("stuck_cmd_speed_min", default_value="0.08"),
             DeclareLaunchArgument("stuck_actual_speed_max", default_value="0.06"),
             DeclareLaunchArgument("stuck_sensor_stale_sec", default_value="0.40"),
+            DeclareLaunchArgument("stuck_front_blocked_dist", default_value="0.22"),
+            DeclareLaunchArgument("stuck_front_blocked_steer_min", default_value="0.08"),
+            DeclareLaunchArgument("stuck_front_blocked_timeout_factor", default_value="0.65"),
+            DeclareLaunchArgument("stuck_side_blocked_dist", default_value="0.20"),
+            DeclareLaunchArgument("stuck_side_asymmetry_min", default_value="0.12"),
+            DeclareLaunchArgument(
+                "stuck_deadlock_unknown_speed_timeout_factor", default_value="1.20"
+            ),
+            DeclareLaunchArgument("stuck_deadlock_clear_grace_sec", default_value="0.18"),
             DeclareLaunchArgument("wrong_direction_trigger_distance_m", default_value="1.20"),
             DeclareLaunchArgument("wrong_direction_conf_enter", default_value="0.55"),
             DeclareLaunchArgument("wrong_direction_conf_exit", default_value="0.35"),
@@ -325,6 +334,25 @@ def generate_launch_description():
                         "stuck_cmd_speed_min": LaunchConfiguration("stuck_cmd_speed_min"),
                         "stuck_actual_speed_max": LaunchConfiguration("stuck_actual_speed_max"),
                         "stuck_sensor_stale_sec": LaunchConfiguration("stuck_sensor_stale_sec"),
+                        "stuck_front_blocked_dist": LaunchConfiguration(
+                            "stuck_front_blocked_dist"
+                        ),
+                        "stuck_front_blocked_steer_min": LaunchConfiguration(
+                            "stuck_front_blocked_steer_min"
+                        ),
+                        "stuck_front_blocked_timeout_factor": LaunchConfiguration(
+                            "stuck_front_blocked_timeout_factor"
+                        ),
+                        "stuck_side_blocked_dist": LaunchConfiguration("stuck_side_blocked_dist"),
+                        "stuck_side_asymmetry_min": LaunchConfiguration(
+                            "stuck_side_asymmetry_min"
+                        ),
+                        "stuck_deadlock_unknown_speed_timeout_factor": LaunchConfiguration(
+                            "stuck_deadlock_unknown_speed_timeout_factor"
+                        ),
+                        "stuck_deadlock_clear_grace_sec": LaunchConfiguration(
+                            "stuck_deadlock_clear_grace_sec"
+                        ),
                         "drive_input_stale_sec": LaunchConfiguration("drive_input_stale_sec"),
                         "stale_speed_cap": LaunchConfiguration("stale_speed_cap"),
                         "halt_on_scan_stale": LaunchConfiguration("halt_on_scan_stale"),

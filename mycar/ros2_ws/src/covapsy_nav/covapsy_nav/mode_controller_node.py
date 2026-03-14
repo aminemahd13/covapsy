@@ -45,7 +45,13 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan, Imu
 from std_msgs.msg import Bool, Float32, String
 
-from covapsy_nav.mode_rules import DriveCommand, select_mode_command, select_recovery_command
+from covapsy_nav.mode_rules import (
+    DriveCommand,
+    select_mode_command,
+    select_recovery_command,
+    select_recovery_timeout,
+    should_trigger_wall_deadlock,
+)
 
 _ACTIVE_MODES = ('REACTIVE', 'MAPPING', 'RACING', 'LEARNING')
 _VALID_MODES = ('IDLE', 'REACTIVE', 'MAPPING', 'RACING', 'LEARNING', 'STOPPED')
@@ -75,6 +81,13 @@ class ModeControllerNode(Node):
         self.declare_parameter('stuck_cmd_speed_min', 0.08)
         self.declare_parameter('stuck_actual_speed_max', 0.06)
         self.declare_parameter('stuck_sensor_stale_sec', 0.40)
+        self.declare_parameter('stuck_front_blocked_dist', 0.22)
+        self.declare_parameter('stuck_front_blocked_steer_min', 0.08)
+        self.declare_parameter('stuck_front_blocked_timeout_factor', 0.65)
+        self.declare_parameter('stuck_side_blocked_dist', 0.20)
+        self.declare_parameter('stuck_side_asymmetry_min', 0.12)
+        self.declare_parameter('stuck_deadlock_unknown_speed_timeout_factor', 1.20)
+        self.declare_parameter('stuck_deadlock_clear_grace_sec', 0.18)
         self.declare_parameter('drive_input_stale_sec', 0.45)
         self.declare_parameter('stale_speed_cap', 0.20)
         self.declare_parameter('halt_on_scan_stale', True)
@@ -163,6 +176,8 @@ class ModeControllerNode(Node):
 
         # Stuck detection & recovery
         self.stopped_since: float = 0.0
+        self.deadlock_since: float = 0.0
+        self.deadlock_last_seen: float = 0.0
         self.is_reversing = False
         self.reverse_phase = 0
         self.reverse_phase_start: float = 0.0
@@ -448,10 +463,56 @@ class ModeControllerNode(Node):
         cmd_speed_min = float(self.get_parameter('stuck_cmd_speed_min').value)
         speed_idle_max = float(self.get_parameter('stuck_actual_speed_max').value)
         stale_sec = float(self.get_parameter('stuck_sensor_stale_sec').value)
+        front_blocked_dist = float(self.get_parameter('stuck_front_blocked_dist').value)
+        front_blocked_steer_min = float(self.get_parameter('stuck_front_blocked_steer_min').value)
+        front_blocked_timeout_factor = float(
+            self.get_parameter('stuck_front_blocked_timeout_factor').value
+        )
+        side_blocked_dist = float(self.get_parameter('stuck_side_blocked_dist').value)
+        side_asymmetry_min = float(self.get_parameter('stuck_side_asymmetry_min').value)
+        deadlock_unknown_speed_timeout_factor = float(
+            self.get_parameter('stuck_deadlock_unknown_speed_timeout_factor').value
+        )
+        deadlock_clear_grace_sec = float(
+            self.get_parameter('stuck_deadlock_clear_grace_sec').value
+        )
 
         speed_known, actual_speed = self._current_speed(now=now, stale_sec=stale_sec)
         requested_motion = selected.linear_x > cmd_speed_min
         stalled = speed_known and actual_speed < speed_idle_max
+        wall_deadlock_candidate = should_trigger_wall_deadlock(
+            mode_active=self.mode in _ACTIVE_MODES,
+            has_recent_scan=has_recent_scan,
+            has_recent_reactive=has_recent_reactive,
+            min_front_dist=self.min_front_dist,
+            stuck_front_blocked_dist=front_blocked_dist,
+            left_clearance=self.left_clearance,
+            right_clearance=self.right_clearance,
+            stuck_side_blocked_dist=side_blocked_dist,
+            stuck_side_asymmetry_min=side_asymmetry_min,
+            reactive_steer=float(self.reactive_cmd.angular.z),
+            stuck_front_blocked_steer_min=front_blocked_steer_min,
+            speed_known=speed_known,
+            actual_speed=actual_speed,
+            stuck_actual_speed_max=speed_idle_max,
+            selected_linear_x=float(selected.linear_x),
+            stuck_cmd_speed_min=cmd_speed_min,
+        )
+        if wall_deadlock_candidate:
+            if self.deadlock_since == 0.0:
+                self.deadlock_since = now
+            self.deadlock_last_seen = now
+            wall_deadlock_active = True
+        else:
+            if (
+                self.deadlock_last_seen > 0.0
+                and (now - self.deadlock_last_seen) <= max(0.0, deadlock_clear_grace_sec)
+            ):
+                wall_deadlock_active = True
+            else:
+                wall_deadlock_active = False
+                self.deadlock_since = 0.0
+                self.deadlock_last_seen = 0.0
 
         ws_known = self.wheel_speed_received and (now - self.last_wheel_speed_time) <= stale_sec
         is_spinning = ws_known and abs(self.imu_yaw_rate) > 1.5 and self.wheel_speed < 0.10
@@ -460,6 +521,8 @@ class ModeControllerNode(Node):
         # During cooldown, don't trigger more recoveries
         if self.recovery_cooldown_until > 0.0 and now < self.recovery_cooldown_until:
             self.stopped_since = 0.0
+            self.deadlock_since = 0.0
+            self.deadlock_last_seen = 0.0
             return selected
 
         should_start_recovery = (
@@ -470,21 +533,45 @@ class ModeControllerNode(Node):
                 (requested_motion and (stalled or is_spinning or is_impact))
                 or is_spinning
                 or is_impact
+                or wall_deadlock_active
             )
         )
 
         if should_start_recovery:
-            if self.stopped_since == 0.0:
-                self.stopped_since = now
-            # IMU-confirmed stuck uses much shorter timeout
-            imu_factor = float(self.get_parameter('stuck_imu_timeout_factor').value)
-            effective_timeout = stuck_timeout * imu_factor if (is_spinning or is_impact) else stuck_timeout
-            if (now - self.stopped_since) > effective_timeout:
+            if wall_deadlock_active:
+                if self.deadlock_since == 0.0:
+                    self.deadlock_since = now
+                elapsed = now - self.deadlock_since
+                self.stopped_since = 0.0
+            else:
+                if self.stopped_since == 0.0:
+                    self.stopped_since = now
+                elapsed = now - self.stopped_since
+                self.deadlock_since = 0.0
+                self.deadlock_last_seen = 0.0
+
+            effective_timeout = select_recovery_timeout(
+                stuck_timeout=stuck_timeout,
+                stuck_imu_timeout_factor=float(self.get_parameter('stuck_imu_timeout_factor').value),
+                stuck_front_blocked_timeout_factor=front_blocked_timeout_factor,
+                stuck_deadlock_unknown_speed_timeout_factor=deadlock_unknown_speed_timeout_factor,
+                is_spinning=is_spinning,
+                is_impact=is_impact,
+                wall_deadlock=wall_deadlock_active,
+                speed_known=speed_known,
+            )
+            if elapsed > effective_timeout:
                 self._start_reverse(now)
                 return self._run_reverse(now, 0.02)
         else:
-            if self.stopped_since > 0.0:
+            if (
+                self.stopped_since > 0.0
+                or self.deadlock_since > 0.0
+                or self.deadlock_last_seen > 0.0
+            ):
                 self.stopped_since = 0.0
+                self.deadlock_since = 0.0
+                self.deadlock_last_seen = 0.0
                 self.recovery_count = 0
 
         # ── Wrong-direction detection → U-turn ──
@@ -519,6 +606,8 @@ class ModeControllerNode(Node):
             self.recovery_cooldown_until = now + cooldown_sec
             self.recovery_count = 0
             self.stopped_since = 0.0
+            self.deadlock_since = 0.0
+            self.deadlock_last_seen = 0.0
             self.get_logger().warn(
                 f'Max recovery attempts ({max_attempts}) reached; '
                 f'cooling down for {cooldown_sec:.1f}s'
@@ -762,6 +851,8 @@ class ModeControllerNode(Node):
         self.reverse_phase_start = 0.0
         self.reverse_distance = 0.0
         self.stopped_since = 0.0
+        self.deadlock_since = 0.0
+        self.deadlock_last_seen = 0.0
         self.recovery_cooldown_until = 0.0
         self.is_uturn = False
         self.uturn_phase = 0
