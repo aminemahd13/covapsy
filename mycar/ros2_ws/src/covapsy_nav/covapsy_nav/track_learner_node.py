@@ -29,12 +29,20 @@ class TrackLearnerNode(Node):
 
         self.declare_parameter("min_spacing", 0.06)
         self.declare_parameter("closure_tol", 0.50)
+        self.declare_parameter("closure_tolerance", 0.50)
         self.declare_parameter("required_laps", 1)
+        self.declare_parameter("smoothing_window", 7)
+        self.declare_parameter("apex_iterations", 5)
         self.declare_parameter("auto_publish", True)
 
+        closure_tol = float(self.get_parameter("closure_tolerance").value)
+        if closure_tol <= 0.0:
+            closure_tol = float(self.get_parameter("closure_tol").value)
         self.learner = TrackLearner(
             min_spacing=float(self.get_parameter("min_spacing").value),
-            closure_tol=float(self.get_parameter("closure_tol").value),
+            closure_tol=closure_tol,
+            smoothing_window=int(self.get_parameter("smoothing_window").value),
+            apex_iterations=int(self.get_parameter("apex_iterations").value),
         )
         self._required_laps = int(self.get_parameter("required_laps").value)
         self._published = False

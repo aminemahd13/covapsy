@@ -162,6 +162,18 @@ class OpponentTracker:
         # 4) Prune stale tracks
         self._prune(now)
 
+    def predict(self, dt: float, timestamp: Optional[float] = None) -> None:
+        """Backward-compatible explicit predict step.
+
+        Tactical code now uses ``update(..., timestamp=...)`` directly, but this
+        method is kept to avoid runtime crashes with older call sites.
+        """
+        now = timestamp if timestamp is not None else time.monotonic()
+        dt = max(0.001, min(float(dt), 1.0))
+        self._last_predict_time = now
+        self._predict_all(dt, now)
+        self._prune(now)
+
     def get_opponents(self) -> List[OpponentTrack]:
         """Return currently active tracks above confidence threshold."""
         return [
@@ -342,3 +354,36 @@ def extract_opponent_clusters(
         centroids.append((cx, cy))
 
     return centroids
+
+
+def nearest_opponent_ahead(
+    tracker: OpponentTracker,
+    car_x: float = 0.0,
+    car_y: float = 0.0,
+    car_yaw: float = 0.0,
+    half_angle_rad: float = math.radians(45),
+) -> Optional[OpponentTrack]:
+    """Compatibility helper forwarding to ``OpponentTracker.nearest_opponent_ahead``."""
+    return tracker.nearest_opponent_ahead(
+        car_x=car_x,
+        car_y=car_y,
+        car_yaw=car_yaw,
+        half_angle_rad=half_angle_rad,
+    )
+
+
+def predict_passing_opportunity(
+    tracker: OpponentTracker,
+    car_speed: float,
+    opponent: Optional[OpponentTrack] = None,
+    horizon_sec: float = _PREDICTION_HORIZON_SEC,
+) -> str:
+    """Compatibility helper forwarding to ``OpponentTracker.predict_passing_opportunity``."""
+    target = opponent if opponent is not None else tracker.nearest_opponent_ahead()
+    if target is None:
+        return "wait"
+    return tracker.predict_passing_opportunity(
+        car_speed=car_speed,
+        opponent=target,
+        horizon_sec=horizon_sec,
+    )

@@ -66,6 +66,10 @@ class TacticalRaceNode(Node):
         self.declare_parameter("near_weight_traffic_boost", 0.35)
         self.declare_parameter("near_weight_clearance_boost", 0.30)
         self.declare_parameter("near_weight_steer_disagreement_boost", 0.20)
+        self.declare_parameter("opponent_presence_enter_conf", 0.42)
+        self.declare_parameter("opponent_presence_exit_conf", 0.26)
+        self.declare_parameter("opponent_presence_hold_sec", 0.60)
+        self.declare_parameter("opponent_presence_min_count", 0.5)
 
         self.reactive_cmd = Twist()
         self.pursuit_cmd = Twist()
@@ -76,6 +80,8 @@ class TacticalRaceNode(Node):
         self.pass_side = 0
         self.pass_lock_until = 0.0
         self.opponent_count = 0.0
+        self.opponent_presence_active = False
+        self.opponent_last_seen = 0.0
 
         # Kalman tracker for multi-frame opponent prediction
         self.tracker: OpponentTracker | None = None
@@ -223,6 +229,7 @@ class TacticalRaceNode(Node):
         )
 
         now = time.monotonic()
+        opponent_present = self._opponent_presence(confidence=confidence, now=now)
         side = select_passing_side(
             front_dist=front_min,
             left_clear=left_clear,
@@ -242,7 +249,7 @@ class TacticalRaceNode(Node):
         speed = clamp(base_speed, 0.0, max_speed) * speed_bias
         steer = clamp(base_steer, -max_steering, max_steering)
 
-        if confidence > 0.30 and front_min < follow_distance:
+        if opponent_present and front_min < follow_distance:
             # Slow down in traffic and bias steering toward clearer side.
             slow_factor = clamp(front_min / max(follow_distance, 0.2), 0.30, 1.0)
 
@@ -250,27 +257,28 @@ class TacticalRaceNode(Node):
             if self.tracker is not None and self.scan_msg is not None:
                 ranges = np.array(self.scan_msg.ranges, dtype=np.float32)
                 angles = float(self.scan_msg.angle_min) + np.arange(ranges.size) * float(self.scan_msg.angle_increment)
-                clusters = extract_opponent_clusters(ranges, angles,
-                                                     max_dist=float(self.get_parameter("opponent_detect_range").value))
-                dt = 0.02  # control loop period
-                self.tracker.predict(dt)
-                self.tracker.update(clusters)
+                clusters = extract_opponent_clusters(
+                    ranges=list(ranges),
+                    angles=list(angles),
+                    max_range=float(self.get_parameter("opponent_detect_range").value),
+                )
+                self.tracker.update(clusters, timestamp=now)
 
-                # Find closest opponent ahead and check if it's moving away
-                from covapsy_nav.opponent_tracker import nearest_opponent_ahead, predict_passing_opportunity
-                nearest = nearest_opponent_ahead(self.tracker)
+                # Find closest tracked opponent ahead and react to predicted behaviour.
+                nearest = self.tracker.nearest_opponent_ahead()
                 if nearest is not None:
-                    # Opponent tracked: use predicted behaviour
-                    opp_dist = math.hypot(nearest.state[0], nearest.state[1])
-                    opp_vx = nearest.state[2]  # positive = moving away in car frame
-                    # If opponent is slower or stationary, start passing manoeuvre
-                    passing = predict_passing_opportunity(self.tracker, car_speed=base_speed)
-                    if passing:
-                        # Opportunity to pass: be more aggressive
-                        slow_factor = max(slow_factor, 0.70)
-                    elif opp_vx > 0.3:
-                        # Opponent moving away: less braking needed
-                        slow_factor = max(slow_factor, 0.50)
+                    pass_hint = self.tracker.predict_passing_opportunity(
+                        car_speed=max(0.0, base_speed),
+                        opponent=nearest,
+                    )
+                    if pass_hint != "wait":
+                        # Opportunity to pass: avoid over-braking and bias to chosen side.
+                        slow_factor = max(slow_factor, 0.72)
+                        if side == 0:
+                            side = 1 if pass_hint == "left" else -1
+                    elif nearest.vx > 0.25:
+                        # Opponent is pulling away: less braking needed.
+                        slow_factor = max(slow_factor, 0.55)
 
             speed *= slow_factor
             steer += steering_bias_gain * float(side)
@@ -293,6 +301,27 @@ class TacticalRaceNode(Node):
         cmd.linear.x = float(speed)
         cmd.angular.z = float(steer)
         self.cmd_pub.publish(cmd)
+
+    def _opponent_presence(self, confidence: float, now: float) -> bool:
+        enter_conf = float(self.get_parameter("opponent_presence_enter_conf").value)
+        exit_conf = float(self.get_parameter("opponent_presence_exit_conf").value)
+        hold_sec = float(self.get_parameter("opponent_presence_hold_sec").value)
+        min_count = float(self.get_parameter("opponent_presence_min_count").value)
+
+        has_strong_signal = confidence >= enter_conf or self.opponent_count >= min_count
+        has_weak_signal = confidence >= exit_conf or self.opponent_count >= min_count
+        if has_strong_signal:
+            self.opponent_presence_active = True
+            self.opponent_last_seen = now
+            return True
+
+        if self.opponent_presence_active:
+            if has_weak_signal:
+                self.opponent_last_seen = now
+            elif (now - self.opponent_last_seen) > max(0.0, hold_sec):
+                self.opponent_presence_active = False
+
+        return self.opponent_presence_active
 
 
 def main(args=None):

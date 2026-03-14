@@ -19,6 +19,7 @@ def generate_launch_description():
             DeclareLaunchArgument("enable_tactical_ai", default_value="false"),
             DeclareLaunchArgument("traffic_mode", default_value="balanced"),
             DeclareLaunchArgument("initial_mode", default_value="IDLE"),
+            DeclareLaunchArgument("start_mode", default_value="REACTIVE"),
             DeclareLaunchArgument("command_topic", default_value="/cmd_vel"),
             DeclareLaunchArgument("allow_runtime_mode_switch", default_value="false"),
             DeclareLaunchArgument("enable_pure_pursuit", default_value="true"),
@@ -29,11 +30,51 @@ def generate_launch_description():
             DeclareLaunchArgument("enable_depth_obstacle", default_value="false"),
             DeclareLaunchArgument("enable_border_detect", default_value="false"),
             DeclareLaunchArgument("use_close_far_fusion", default_value="true"),
+            DeclareLaunchArgument("phase0_duration", default_value="0.20"),
+            DeclareLaunchArgument("phase1_duration", default_value="0.10"),
+            DeclareLaunchArgument("max_recovery_attempts", default_value="30"),
+            DeclareLaunchArgument("recovery_cooldown_sec", default_value="10.0"),
+            DeclareLaunchArgument("stuck_cmd_speed_min", default_value="0.08"),
+            DeclareLaunchArgument("stuck_actual_speed_max", default_value="0.06"),
+            DeclareLaunchArgument("stuck_sensor_stale_sec", default_value="0.40"),
+            DeclareLaunchArgument("wrong_direction_trigger_distance_m", default_value="1.20"),
+            DeclareLaunchArgument("track_learned_handoff_confirm_sec", default_value="0.50"),
+            DeclareLaunchArgument("tactical_context_mode", default_value="manual"),
+            DeclareLaunchArgument("tactical_opp_conf_threshold", default_value="0.45"),
+            DeclareLaunchArgument("tactical_opp_count_threshold", default_value="0.5"),
+            DeclareLaunchArgument("tactical_opp_persist_sec", default_value="0.60"),
+            DeclareLaunchArgument("tactical_clear_persist_sec", default_value="1.20"),
             DeclareLaunchArgument("reactive_far_center_gain", default_value="0.35"),
             DeclareLaunchArgument("reactive_camera_center_gain", default_value="0.25"),
             DeclareLaunchArgument("reactive_far_weight_min", default_value="0.10"),
             DeclareLaunchArgument("reactive_far_weight_max", default_value="0.55"),
             DeclareLaunchArgument("reactive_fusion_clearance_ref_m", default_value="1.8"),
+            DeclareLaunchArgument("reactive_steering_low_pass_alpha", default_value="0.70"),
+            DeclareLaunchArgument("reactive_steering_low_pass_alpha_min", default_value="0.62"),
+            DeclareLaunchArgument("reactive_steering_low_pass_alpha_max", default_value="0.90"),
+            DeclareLaunchArgument("reactive_steering_low_pass_speed_ref_m_s", default_value="1.8"),
+            DeclareLaunchArgument("reactive_steering_jerk_limit_rad", default_value="0.035"),
+            DeclareLaunchArgument("reactive_steering_sign_hysteresis_rad", default_value="0.025"),
+            DeclareLaunchArgument("reactive_steering_center_hold_speed_m_s", default_value="0.80"),
+            DeclareLaunchArgument("reactive_steering_slew_speed_scale", default_value="0.45"),
+            DeclareLaunchArgument("reactive_speed_slew_up", default_value="0.10"),
+            DeclareLaunchArgument("reactive_speed_slew_down", default_value="0.14"),
+            DeclareLaunchArgument("reactive_use_odom_speed_fallback", default_value="true"),
+            DeclareLaunchArgument("reactive_wheel_speed_timeout_sec", default_value="0.30"),
+            DeclareLaunchArgument("reactive_odom_speed_timeout_sec", default_value="0.45"),
+            DeclareLaunchArgument("reactive_depth_timeout_sec", default_value="0.35"),
+            DeclareLaunchArgument("reactive_camera_timeout_sec", default_value="0.30"),
+            DeclareLaunchArgument("reactive_camera_offset_conf_ref_rad", default_value="0.20"),
+            DeclareLaunchArgument("reactive_camera_offset_jitter_ref_rad", default_value="0.08"),
+            DeclareLaunchArgument("reactive_camera_offset_min_confidence", default_value="0.12"),
+            DeclareLaunchArgument("drive_input_stale_sec", default_value="0.45"),
+            DeclareLaunchArgument("stale_speed_cap", default_value="0.20"),
+            DeclareLaunchArgument("halt_on_scan_stale", default_value="true"),
+            DeclareLaunchArgument("track_learning_required_laps", default_value="1"),
+            DeclareLaunchArgument("track_learning_closure_tolerance", default_value="0.60"),
+            DeclareLaunchArgument("track_learning_smoothing_window", default_value="7"),
+            DeclareLaunchArgument("track_learning_apex_iterations", default_value="5"),
+            DeclareLaunchArgument("track_learning_auto_publish", default_value="true"),
             DeclareLaunchArgument("tactical_near_weight_base", default_value="0.35"),
             DeclareLaunchArgument("tactical_near_weight_min", default_value="0.20"),
             DeclareLaunchArgument("tactical_near_weight_max", default_value="0.90"),
@@ -86,6 +127,52 @@ def generate_launch_description():
                         "far_weight_max": LaunchConfiguration("reactive_far_weight_max"),
                         "fusion_clearance_ref_m": LaunchConfiguration(
                             "reactive_fusion_clearance_ref_m"
+                        ),
+                        "steering_low_pass_alpha": LaunchConfiguration(
+                            "reactive_steering_low_pass_alpha"
+                        ),
+                        "steering_low_pass_alpha_min": LaunchConfiguration(
+                            "reactive_steering_low_pass_alpha_min"
+                        ),
+                        "steering_low_pass_alpha_max": LaunchConfiguration(
+                            "reactive_steering_low_pass_alpha_max"
+                        ),
+                        "steering_low_pass_speed_ref_m_s": LaunchConfiguration(
+                            "reactive_steering_low_pass_speed_ref_m_s"
+                        ),
+                        "steering_jerk_limit_rad": LaunchConfiguration(
+                            "reactive_steering_jerk_limit_rad"
+                        ),
+                        "steering_sign_hysteresis_rad": LaunchConfiguration(
+                            "reactive_steering_sign_hysteresis_rad"
+                        ),
+                        "steering_center_hold_speed_m_s": LaunchConfiguration(
+                            "reactive_steering_center_hold_speed_m_s"
+                        ),
+                        "steering_slew_speed_scale": LaunchConfiguration(
+                            "reactive_steering_slew_speed_scale"
+                        ),
+                        "speed_slew_up": LaunchConfiguration("reactive_speed_slew_up"),
+                        "speed_slew_down": LaunchConfiguration("reactive_speed_slew_down"),
+                        "use_odom_speed_fallback": LaunchConfiguration(
+                            "reactive_use_odom_speed_fallback"
+                        ),
+                        "wheel_speed_timeout_sec": LaunchConfiguration(
+                            "reactive_wheel_speed_timeout_sec"
+                        ),
+                        "odom_speed_timeout_sec": LaunchConfiguration(
+                            "reactive_odom_speed_timeout_sec"
+                        ),
+                        "depth_timeout_sec": LaunchConfiguration("reactive_depth_timeout_sec"),
+                        "camera_timeout_sec": LaunchConfiguration("reactive_camera_timeout_sec"),
+                        "camera_offset_conf_ref_rad": LaunchConfiguration(
+                            "reactive_camera_offset_conf_ref_rad"
+                        ),
+                        "camera_offset_jitter_ref_rad": LaunchConfiguration(
+                            "reactive_camera_offset_jitter_ref_rad"
+                        ),
+                        "camera_offset_min_confidence": LaunchConfiguration(
+                            "reactive_camera_offset_min_confidence"
                         ),
                     }
                 ],
@@ -174,9 +261,11 @@ def generate_launch_description():
                 condition=IfCondition(LaunchConfiguration("enable_track_learning")),
                 parameters=[
                     {
-                        "required_laps": 1,
-                        "closure_tolerance": 0.60,
-                        "smoothing_window": 7,
+                        "required_laps": LaunchConfiguration("track_learning_required_laps"),
+                        "closure_tolerance": LaunchConfiguration("track_learning_closure_tolerance"),
+                        "smoothing_window": LaunchConfiguration("track_learning_smoothing_window"),
+                        "apex_iterations": LaunchConfiguration("track_learning_apex_iterations"),
+                        "auto_publish": LaunchConfiguration("track_learning_auto_publish"),
                     }
                 ],
                 output="screen",
@@ -204,6 +293,7 @@ def generate_launch_description():
                 parameters=[
                     {
                         "initial_mode": LaunchConfiguration("initial_mode"),
+                        "start_mode": LaunchConfiguration("start_mode"),
                         "stuck_timeout": 2.0,
                         "reverse_speed": -0.4,
                         "reverse_duration": 1.0,
@@ -216,6 +306,35 @@ def generate_launch_description():
                         "enable_tactical_ai": LaunchConfiguration("enable_tactical_ai"),
                         "tactical_timeout": 0.25,
                         "lock_mode_after_start": True,
+                        "phase0_duration": LaunchConfiguration("phase0_duration"),
+                        "phase1_duration": LaunchConfiguration("phase1_duration"),
+                        "max_recovery_attempts": LaunchConfiguration("max_recovery_attempts"),
+                        "recovery_cooldown_sec": LaunchConfiguration("recovery_cooldown_sec"),
+                        "stuck_cmd_speed_min": LaunchConfiguration("stuck_cmd_speed_min"),
+                        "stuck_actual_speed_max": LaunchConfiguration("stuck_actual_speed_max"),
+                        "stuck_sensor_stale_sec": LaunchConfiguration("stuck_sensor_stale_sec"),
+                        "drive_input_stale_sec": LaunchConfiguration("drive_input_stale_sec"),
+                        "stale_speed_cap": LaunchConfiguration("stale_speed_cap"),
+                        "halt_on_scan_stale": LaunchConfiguration("halt_on_scan_stale"),
+                        "wrong_direction_trigger_distance_m": LaunchConfiguration(
+                            "wrong_direction_trigger_distance_m"
+                        ),
+                        "track_learned_handoff_confirm_sec": LaunchConfiguration(
+                            "track_learned_handoff_confirm_sec"
+                        ),
+                        "tactical_context_mode": LaunchConfiguration("tactical_context_mode"),
+                        "tactical_opp_conf_threshold": LaunchConfiguration(
+                            "tactical_opp_conf_threshold"
+                        ),
+                        "tactical_opp_count_threshold": LaunchConfiguration(
+                            "tactical_opp_count_threshold"
+                        ),
+                        "tactical_opp_persist_sec": LaunchConfiguration(
+                            "tactical_opp_persist_sec"
+                        ),
+                        "tactical_clear_persist_sec": LaunchConfiguration(
+                            "tactical_clear_persist_sec"
+                        ),
                     }
                 ],
                 output="screen",

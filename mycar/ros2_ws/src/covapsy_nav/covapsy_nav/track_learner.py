@@ -54,6 +54,8 @@ class TrackLearner:
         self,
         min_spacing: float = _MIN_SPACING_M,
         closure_tol: float = _CLOSURE_TOL_M,
+        smoothing_window: int = _SMOOTH_WINDOW,
+        apex_iterations: int = _APEX_ITERATIONS,
     ):
         self.raw_points: List[Tuple[float, float]] = []
         self.laps_detected: int = 0
@@ -61,6 +63,8 @@ class TrackLearner:
         self.racing_line: Optional[List[Dict]] = None
         self._min_spacing = min_spacing
         self._closure_tol = closure_tol
+        self._smooth_window = max(3, int(smoothing_window))
+        self._apex_iterations = max(1, int(apex_iterations))
         self._last_x = float("nan")
         self._last_y = float("nan")
 
@@ -106,7 +110,7 @@ class TrackLearner:
         pts = np.array(self.lap_points, dtype=np.float64)
 
         # 1) Smooth
-        pts = _smooth_path(pts, window=_SMOOTH_WINDOW)
+        pts = _smooth_path(pts, window=self._smooth_window)
 
         # 2) Resample at even spacing
         pts = _resample_path(pts, spacing=max(self._min_spacing, 0.08))
@@ -118,10 +122,10 @@ class TrackLearner:
         curvatures = _compute_curvatures(pts)
 
         # 4) Apex cutting — iteratively shift toward inside of curves
-        pts = _apex_cut(pts, curvatures, iterations=_APEX_ITERATIONS)
+        pts = _apex_cut(pts, curvatures, iterations=self._apex_iterations)
 
         # 5) Re-smooth after apex cutting
-        pts = _smooth_path(pts, window=max(3, _SMOOTH_WINDOW // 2))
+        pts = _smooth_path(pts, window=max(3, self._smooth_window // 2))
 
         # 6) Recompute curvature on optimised line
         curvatures = _compute_curvatures(pts)
