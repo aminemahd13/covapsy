@@ -168,7 +168,7 @@ _K_HEADING = 0.50
 _K_REPULSION = 1.20
 _K_IMU_DAMP = 0.10
 _REPULSION_DIST_FACTOR = 2.5
-_CLEARANCE_REF_M = 1.80
+_CLEARANCE_REF_M = 2.00
 _CURV_SPEED_PEN = 0.35
 _STEER_SPEED_PEN = 0.25
 _EMERGENCY_STOP_M = 0.18
@@ -190,10 +190,10 @@ _N_SECTORS = 36
 _SECTOR_SMOOTH_HW = 2
 
 # Wall-ahead detection
-_WALL_AHEAD_CONE_RAD = 0.35
+_WALL_AHEAD_CONE_RAD = 0.52
 _WALL_AHEAD_THRESH_M = 1.5
 _WALL_AHEAD_CRIT_M = 0.45
-_ESCAPE_GAIN = 1.8
+_ESCAPE_GAIN = 2.2
 _ESCAPE_FWD_BIAS = 0.3
 _WALL_SPEED_PENALTY = 0.5
 
@@ -271,6 +271,20 @@ def _compute_python(
             best_escape_score = score
             escape_angle = direction
 
+    # ── Near-field corner check ──
+    corner_urgency = 0.0
+    corner_push_steer = 0.0
+    corner_cone_rad = 1.047  # ±60°
+    corner_dist_m = 0.30
+    corner_mask = (np.abs(a) <= corner_cone_rad) & (r < corner_dist_m)
+    if np.any(corner_mask):
+        closeness = (corner_dist_m - r[corner_mask]) / corner_dist_m
+        corner_weight_sum = float(np.sum(closeness))
+        corner_count = int(np.sum(corner_mask))
+        corner_urgency = _clamp(corner_weight_sum / corner_count, 0.0, 1.0)
+        avg_corner_angle = float(np.sum(closeness * a[corner_mask])) / corner_weight_sum
+        corner_push_steer = -avg_corner_angle * 2.0 * corner_urgency
+
     # ── Corridor model ──
     max_pair_angle = fov_half * 0.85
     pair_angles = np.array([
@@ -332,6 +346,9 @@ def _compute_python(
         force = force ** 2
         steering -= float(np.sum(force * np.sin(a[danger_mask]))) * max_steering * _K_REPULSION
 
+    # Corner push
+    steering += corner_push_steer
+
     # Camera offset
     if abs(camera_offset) > 0.01 and math.isfinite(camera_offset):
         steering += camera_gain * camera_offset
@@ -370,6 +387,9 @@ def _compute_python(
 
     speed = max_speed * clearance_factor * curvature_factor * steer_factor * wall_speed_factor
     speed = _clamp(speed, 0.0, max_speed)
+
+    # Corner speed reduction
+    speed *= (1.0 - 0.6 * corner_urgency)
 
     # TTC
     ttc_t = max(ttc_target, 0.25)

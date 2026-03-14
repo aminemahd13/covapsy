@@ -38,7 +38,7 @@ extern "C" {
 #define RC_REPULSION_DIST_FACTOR  2.5f
 
 /* Forward clearance reference for speed = max_speed.                       */
-#define RC_CLEARANCE_REF_M   1.80f
+#define RC_CLEARANCE_REF_M   2.00f
 
 /* Speed penalties per unit curvature and per unit steering ratio.           */
 #define RC_CURV_SPEED_PEN    0.35f

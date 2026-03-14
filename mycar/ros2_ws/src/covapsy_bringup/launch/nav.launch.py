@@ -10,11 +10,11 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription(
         [
-            DeclareLaunchArgument("max_speed", default_value="2.0"),
+            DeclareLaunchArgument("max_speed", default_value="2.5"),
             DeclareLaunchArgument("safety_radius", default_value="0.20"),
             DeclareLaunchArgument("race_profile", default_value="RACE_STABLE"),
             DeclareLaunchArgument("deployment_mode", default_value="real"),
-            DeclareLaunchArgument("max_speed_real_cap", default_value="2.0"),
+            DeclareLaunchArgument("max_speed_real_cap", default_value="2.5"),
             DeclareLaunchArgument("max_speed_sim_cap", default_value="2.5"),
             DeclareLaunchArgument("vehicle_max_steering_rad", default_value="0.32"),
             DeclareLaunchArgument("enable_tactical_ai", default_value="false"),

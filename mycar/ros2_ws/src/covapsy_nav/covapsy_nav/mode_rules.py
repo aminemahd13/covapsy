@@ -51,15 +51,30 @@ def should_trigger_wall_deadlock(
 
     steer_intent = abs(float(reactive_steer)) >= float(stuck_front_blocked_steer_min)
     selected_stopped = float(selected_linear_x) <= float(stuck_cmd_speed_min)
-    if not (has_contact and steer_intent and selected_stopped):
-        return False
 
-    # If speed telemetry is unknown/stale, allow recovery to avoid permanent deadlock.
-    if not speed_known:
+    # Primary path: wall contact + steering intent + reactive output is stopped
+    if has_contact and steer_intent and selected_stopped:
+        if not speed_known:
+            return True
+        if not math.isfinite(float(actual_speed)):
+            return False
+        return float(actual_speed) < float(stuck_actual_speed_max)
+
+    # Oblique stuck: side wall very close, reactive still commanding forward
+    # (wall outside its forward cone), but actual speed is zero.
+    # This catches the 45° stuck scenario.
+    oblique_stuck = (
+        side_blocked
+        and side_min <= 0.15
+        and not selected_stopped
+        and speed_known
+        and math.isfinite(float(actual_speed))
+        and float(actual_speed) < float(stuck_actual_speed_max)
+    )
+    if oblique_stuck:
         return True
-    if not math.isfinite(float(actual_speed)):
-        return False
-    return float(actual_speed) < float(stuck_actual_speed_max)
+
+    return False
 
 
 def select_recovery_timeout(
@@ -71,11 +86,14 @@ def select_recovery_timeout(
     is_impact: bool,
     wall_deadlock: bool,
     speed_known: bool,
+    position_stuck: bool = False,
 ) -> float:
     """Select recovery timeout while preserving trigger precedence."""
     base_timeout = max(0.01, float(stuck_timeout))
     if is_spinning or is_impact:
         factor = float(stuck_imu_timeout_factor)
+    elif position_stuck:
+        factor = 0.5
     elif wall_deadlock and speed_known:
         factor = float(stuck_front_blocked_timeout_factor)
     elif wall_deadlock and not speed_known:

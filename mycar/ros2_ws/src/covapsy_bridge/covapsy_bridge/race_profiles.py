@@ -5,7 +5,7 @@ from __future__ import annotations
 
 _PROFILE_CAPS = {
     "HOMOLOGATION": {"real": 0.8, "sim": 0.8},
-    "RACE_STABLE": {"real": 2.0, "sim": 2.5},
+    "RACE_STABLE": {"real": 2.5, "sim": 2.5},
     "RACE_AGGRESSIVE": {"real": 2.6, "sim": 3.2},
 }
 

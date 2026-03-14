@@ -13,7 +13,7 @@ class RaceProfileCaps:
 
 _PROFILE_CAPS = {
     "HOMOLOGATION": RaceProfileCaps(real_max_speed_m_s=0.8, sim_max_speed_m_s=0.8),
-    "RACE_STABLE": RaceProfileCaps(real_max_speed_m_s=2.0, sim_max_speed_m_s=2.5),
+    "RACE_STABLE": RaceProfileCaps(real_max_speed_m_s=2.5, sim_max_speed_m_s=2.5),
     "RACE_AGGRESSIVE": RaceProfileCaps(real_max_speed_m_s=2.6, sim_max_speed_m_s=3.2),
 }
 

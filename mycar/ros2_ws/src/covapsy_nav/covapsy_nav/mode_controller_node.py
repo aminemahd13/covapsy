@@ -34,6 +34,7 @@ Publishes:
   /car_mode  (String)   - current mode for display
 """
 
+import collections
 import math
 import time
 
@@ -170,6 +171,9 @@ class ModeControllerNode(Node):
         self.left_clearance = float('inf')
         self.right_clearance = float('inf')
 
+        # Position history for position-based stuck detection
+        self._odom_history: collections.deque = collections.deque(maxlen=50)
+
         # IMU state
         self.imu_yaw_rate = 0.0
         self.imu_lon_accel = 0.0
@@ -289,9 +293,11 @@ class ModeControllerNode(Node):
         lin = msg.twist.twist.linear
         self.odom_speed = float(np.hypot(lin.x, lin.y))
         self.odom_speed_received = True
-        self.last_odom_time = time.monotonic()
+        now = time.monotonic()
+        self.last_odom_time = now
         x = float(msg.pose.pose.position.x)
         y = float(msg.pose.pose.position.y)
+        self._odom_history.append((x, y, now))
         if self._last_odom_xy is not None:
             dx = x - self._last_odom_xy[0]
             dy = y - self._last_odom_xy[1]
@@ -518,6 +524,12 @@ class ModeControllerNode(Node):
         is_spinning = ws_known and abs(self.imu_yaw_rate) > 1.5 and self.wheel_speed < 0.10
         is_impact = ws_known and self.imu_lon_accel < -3.0 and self.wheel_speed < 0.05
 
+        # Position-based stuck: car commands forward but actual position doesn't change
+        position_stuck = (
+            requested_motion
+            and self._is_position_stuck(now, window_sec=0.8, min_dist=0.05)
+        )
+
         # During cooldown, don't trigger more recoveries
         if self.recovery_cooldown_until > 0.0 and now < self.recovery_cooldown_until:
             self.stopped_since = 0.0
@@ -534,6 +546,7 @@ class ModeControllerNode(Node):
                 or is_spinning
                 or is_impact
                 or wall_deadlock_active
+                or position_stuck
             )
         )
 
@@ -559,6 +572,7 @@ class ModeControllerNode(Node):
                 is_impact=is_impact,
                 wall_deadlock=wall_deadlock_active,
                 speed_known=speed_known,
+                position_stuck=position_stuck,
             )
             if elapsed > effective_timeout:
                 self._start_reverse(now)
@@ -829,6 +843,25 @@ class ModeControllerNode(Node):
         return self.wrong_direction or self.wrong_direction_conf_active or distance_persistent
 
     # ── Helpers ──
+
+    def _is_position_stuck(
+        self, now: float, window_sec: float = 0.8, min_dist: float = 0.05
+    ) -> bool:
+        """Return True if position hasn't moved min_dist within window_sec."""
+        if len(self._odom_history) < 2:
+            return False
+        newest = self._odom_history[-1]
+        cutoff = now - window_sec
+        oldest = None
+        for entry in self._odom_history:
+            if entry[2] >= cutoff:
+                oldest = entry
+                break
+        if oldest is None or (now - oldest[2]) < window_sec * 0.5:
+            return False
+        dx = newest[0] - oldest[0]
+        dy = newest[1] - oldest[1]
+        return math.hypot(dx, dy) < min_dist
 
     def _current_speed(self, now: float, stale_sec: float) -> tuple[bool, float]:
         if (

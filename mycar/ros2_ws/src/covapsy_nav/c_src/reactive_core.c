@@ -9,11 +9,12 @@
  *
  * New approach:
  *   1. Sector-based depth map for fast gap finding        (O(n))
- *   2. Forward wall detection in ±20° cone                (O(1) lookup)
+ *   2. Forward wall detection in ±30° cone                (O(1) lookup)
  *   3. Escape direction = deepest sector with forward bias (O(sectors))
  *   4. Progressive override: as wall gets closer, escape steering dominates
- *   5. Corridor centering + heading for normal driving    (unchanged)
- *   6. Extended-range obstacle repulsion                  (tuned)
+ *   5. Near-field corner check for close oblique obstacles (speed + steer)
+ *   6. Corridor centering + heading for normal driving    (unchanged)
+ *   7. Extended-range obstacle repulsion                  (tuned)
  *
  * Compile:
  *   gcc -shared -fPIC -O2 -o libreactive_core.so reactive_core.c -lm
@@ -28,10 +29,10 @@
 #define SECTOR_SMOOTH_HW    2        /* smoothing half-window: ±2 sectors = 5 total (~28°) */
 
 /* ── Wall-ahead detection ── */
-#define WALL_AHEAD_CONE_RAD 0.35f    /* ±20° forward cone for wall detection     */
+#define WALL_AHEAD_CONE_RAD 0.52f    /* ±30° forward cone for wall detection     */
 #define WALL_AHEAD_THRESH_M 1.5f     /* activation distance (m)                  */
 #define WALL_AHEAD_CRIT_M   0.45f    /* full escape override distance (m)        */
-#define ESCAPE_GAIN         1.8f     /* steering aggressiveness toward escape    */
+#define ESCAPE_GAIN         2.2f     /* steering aggressiveness toward escape    */
 #define ESCAPE_FWD_BIAS     0.3f     /* prefer more forward escape directions    */
 #define WALL_SPEED_PENALTY  0.5f     /* max speed reduction from wall ahead      */
 
@@ -196,6 +197,41 @@ void compute_reactive(
     }
 
     /* ================================================================
+     * 3d. NEAR-FIELD CORNER CHECK
+     *
+     * Detect obstacles within ±60° at very close range (<0.30m).
+     * Applies speed reduction and steering push away from the obstacle.
+     * This catches oblique walls that are outside the forward cone but
+     * dangerously close to the car's corners.
+     * ================================================================ */
+    float corner_urgency = 0.0f;
+    float corner_push_steer = 0.0f;
+    {
+        const float corner_cone_rad = 1.047f;  /* ±60° */
+        const float corner_dist_m = 0.30f;
+        float corner_weight_sum = 0.0f;
+        float corner_angle_sum = 0.0f;
+        int corner_count = 0;
+
+        for (int i = 0; i < n; i++) {
+            if (fabsf(angles[i]) <= corner_cone_rad && ranges[i] < corner_dist_m) {
+                float closeness = (corner_dist_m - ranges[i]) / corner_dist_m;
+                corner_weight_sum += closeness;
+                corner_angle_sum += closeness * angles[i];
+                corner_count++;
+            }
+        }
+
+        if (corner_count > 0) {
+            corner_urgency = clampf(
+                corner_weight_sum / (float)corner_count, 0.0f, 1.0f);
+            float avg_corner_angle = corner_angle_sum / corner_weight_sum;
+            /* Push steering away from obstacle direction */
+            corner_push_steer = -avg_corner_angle * 2.0f * corner_urgency;
+        }
+    }
+
+    /* ================================================================
      * 4. CORRIDOR MODEL: symmetric angle-pair wall distances
      *
      * For each angle alpha in {~10°, ~20°, ..., ~85°}:
@@ -326,12 +362,15 @@ void compute_reactive(
     }
     steering += repulsion_sum * p->max_steering * RC_K_REPULSION;
 
-    /* 5f. Camera border offset */
+    /* 5f. Near-field corner steering push */
+    steering += corner_push_steer;
+
+    /* 5g. Camera border offset */
     if (fabsf(p->camera_offset) > 0.01f && isfinite(p->camera_offset)) {
         steering += p->camera_gain * p->camera_offset;
     }
 
-    /* 5g. IMU yaw-rate damping */
+    /* 5h. IMU yaw-rate damping */
     if (fabsf(p->imu_yaw_rate) > 0.05f) {
         steering -= RC_K_IMU_DAMP * p->imu_yaw_rate;
     }
@@ -391,7 +430,10 @@ void compute_reactive(
                 * steer_factor * wall_speed_factor;
     speed = clampf(speed, 0.0f, p->max_speed);
 
-    /* 6d. TTC guard */
+    /* 6d. Near-field corner speed reduction */
+    speed *= (1.0f - 0.6f * corner_urgency);
+
+    /* 6e. TTC guard */
     float ttc_target = maxf(p->ttc_target, 0.25f);
     if (speed > 0.05f) {
         float ttc = effective_clear / speed;
@@ -400,7 +442,7 @@ void compute_reactive(
         }
     }
 
-    /* 6e. Speed floor when clear, emergency stop when close */
+    /* 6f. Speed floor when clear, emergency stop when close */
     if (effective_clear > RC_CREEP_CLEAR_M) {
         speed = maxf(p->min_speed, speed);
     } else if (effective_clear < RC_EMERGENCY_STOP_M) {

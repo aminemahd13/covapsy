@@ -177,6 +177,42 @@ def test_deadlock_does_not_trigger_in_narrow_symmetric_corridor():
     assert not should_trigger_wall_deadlock(**kwargs)
 
 
+def test_oblique_stuck_triggers_when_side_very_close_and_speed_zero():
+    """Oblique stuck: side wall very close, reactive commanding forward, actual speed zero."""
+    kwargs = _wall_deadlock_kwargs()
+    kwargs["min_front_dist"] = 0.50  # front is clear (wall at 45°)
+    kwargs["left_clearance"] = 0.12  # very close side contact
+    kwargs["right_clearance"] = 0.45
+    kwargs["selected_linear_x"] = 0.50  # reactive still commanding forward
+    kwargs["speed_known"] = True
+    kwargs["actual_speed"] = 0.02  # but car isn't moving
+    assert should_trigger_wall_deadlock(**kwargs)
+
+
+def test_oblique_stuck_does_not_fire_when_speed_unknown():
+    """Oblique stuck must be conservative: require speed_known=True."""
+    kwargs = _wall_deadlock_kwargs()
+    kwargs["min_front_dist"] = 0.50
+    kwargs["left_clearance"] = 0.12
+    kwargs["right_clearance"] = 0.45
+    kwargs["selected_linear_x"] = 0.50
+    kwargs["speed_known"] = False
+    kwargs["actual_speed"] = 0.0
+    assert not should_trigger_wall_deadlock(**kwargs)
+
+
+def test_oblique_stuck_does_not_fire_in_symmetric_narrow_corridor():
+    """Symmetric narrow corridor should NOT trigger oblique stuck (side_asym too low)."""
+    kwargs = _wall_deadlock_kwargs()
+    kwargs["min_front_dist"] = 0.50
+    kwargs["left_clearance"] = 0.14
+    kwargs["right_clearance"] = 0.14  # symmetric — side_asym < stuck_side_asymmetry_min
+    kwargs["selected_linear_x"] = 0.50
+    kwargs["speed_known"] = True
+    kwargs["actual_speed"] = 0.02
+    assert not should_trigger_wall_deadlock(**kwargs)
+
+
 def test_recovery_timeout_prioritizes_spin_over_deadlock():
     timeout = select_recovery_timeout(
         stuck_timeout=0.8,
