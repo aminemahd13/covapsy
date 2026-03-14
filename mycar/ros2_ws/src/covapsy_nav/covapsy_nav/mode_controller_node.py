@@ -1,30 +1,37 @@
-"""Dual-Mode State Machine for COVAPSY.
+"""Mode Controller for COVAPSY — state machine with fast stuck recovery.
 
 Top-level controller selecting between driving modes:
   IDLE     - waiting for start signal
-  REACTIVE - Follow-the-Gap (unknown track, first lap, or SLAM failure)
+  REACTIVE - Corridor-following reactive driving
   MAPPING  - Slow driving while SLAM builds map
+  LEARNING - Track learning (setup laps)
   RACING   - Pure Pursuit on optimized trajectory
   STOPPED  - Remote stop received or emergency
 
+Key improvements over previous version:
+  - Stuck detection timeout: 2.0s → 0.8s (0.3s with IMU confirmation)
+  - Recovery uses LiDAR to choose best escape direction
+  - Faster reverse speed and shorter recovery cycle
+  - Simpler wrong-direction handling
+
 Subscribes:
-  /cmd_vel_reactive (Twist)  - from gap_follower_node
+  /cmd_vel_reactive (Twist)  - from reactive controller
   /cmd_vel_pursuit  (Twist)  - from pure_pursuit_node
   /cmd_vel_tactical (Twist)  - from tactical_race_node
   /race_start       (Bool)   - start signal
   /race_stop        (Bool)   - stop signal
-  /scan_filtered    (LaserScan) - for emergency detection
+  /scan_filtered    (LaserScan) - for emergency detection + recovery steering
   /rear_obstacle    (Bool)   - rear IR obstacle sensor
   /wheel_speed      (Float32)- actual wheel speed from bridge
-  /odom             (Odometry)- fallback speed estimate for stuck detection
-  /set_mode         (String) - optional external mode switch (disabled by default)
+  /odom             (Odometry)- fallback speed estimate
+  /set_mode         (String) - optional external mode switch
   /opponent_confidence (Float32) - tactical context confidence
   /opponent_count   (Float32)- tactical context count
-  /wrong_direction_confidence (Float32) - optional confidence supplement
+  /wrong_direction_confidence (Float32)
 
 Publishes:
-  command_topic (Twist) - final command to bridge backend
-  /car_mode  (String) - current mode for TFT display
+  command_topic (Twist) - final command to bridge
+  /car_mode  (String)   - current mode for display
 """
 
 import math
@@ -45,11 +52,11 @@ _VALID_MODES = ('IDLE', 'REACTIVE', 'MAPPING', 'RACING', 'LEARNING', 'STOPPED')
 _EMERGENCY_STOP_DIST = 0.15
 
 # U-turn parameters
-_UTURN_BRAKE_DURATION = 0.3  # seconds
-_UTURN_REVERSE_DURATION = 1.2
-_UTURN_FORWARD_DURATION = 0.8
-_UTURN_REVERSE_SPEED = -0.45
-_UTURN_FORWARD_SPEED = 0.45
+_UTURN_BRAKE_DURATION = 0.3
+_UTURN_REVERSE_DURATION = 1.0
+_UTURN_FORWARD_DURATION = 0.7
+_UTURN_REVERSE_SPEED = -0.50
+_UTURN_FORWARD_SPEED = 0.50
 
 
 class ModeControllerNode(Node):
@@ -60,9 +67,9 @@ class ModeControllerNode(Node):
         self.declare_parameter('mapping_speed_cap', 0.5)
         self.declare_parameter('initial_mode', 'IDLE')
         self.declare_parameter('start_mode', 'REACTIVE')
-        self.declare_parameter('stuck_timeout', 2.0)
-        self.declare_parameter('reverse_speed', -0.4)
-        self.declare_parameter('reverse_duration', 1.0)
+        self.declare_parameter('stuck_timeout', 0.8)          # was 2.0
+        self.declare_parameter('reverse_speed', -0.6)         # was -0.4
+        self.declare_parameter('reverse_duration', 0.8)       # was 1.0
         self.declare_parameter('reverse_steer', 0.3)
         self.declare_parameter('max_reverse_distance', 0.8)
         self.declare_parameter('stuck_cmd_speed_min', 0.08)
@@ -89,21 +96,18 @@ class ModeControllerNode(Node):
         self.declare_parameter('wrong_direction_conf_exit', 0.35)
         self.declare_parameter('wrong_direction_confirm_ticks', 6)
         self.declare_parameter('wrong_direction_distance_confirm_m', 0.25)
-        self.declare_parameter('wrong_direction_correction_trigger_ticks', 8)
-        self.declare_parameter('wrong_direction_correction_distance_m', 0.45)
-        self.declare_parameter('wrong_direction_correction_speed_m_s', 0.18)
-        self.declare_parameter('wrong_direction_correction_steer_rad', 0.22)
-        self.declare_parameter('wrong_direction_correction_max_sec', 0.70)
-        self.declare_parameter('wrong_direction_uturn_trigger_ticks', 20)
+        self.declare_parameter('wrong_direction_uturn_trigger_ticks', 15)
         self.declare_parameter('uturn_steer', 0.32)
         self.declare_parameter('uturn_blocked_forward_speed', 0.20)
         self.declare_parameter('uturn_blocked_forward_sec', 0.60)
-        # ESC arming phase durations — set to 0.0 in simulation to skip arming sequence
+        # ESC arming durations (0.0 in sim)
         self.declare_parameter('phase0_duration', 0.20)
         self.declare_parameter('phase1_duration', 0.10)
-        # Recovery cap: after this many consecutive failures, pause for cooldown
+        # Recovery limits
         self.declare_parameter('max_recovery_attempts', 30)
         self.declare_parameter('recovery_cooldown_sec', 10.0)
+        # IMU-confirmed stuck uses shorter timeout
+        self.declare_parameter('stuck_imu_timeout_factor', 0.4)
 
         initial_mode = str(self.get_parameter('initial_mode').value).upper()
         self.mode = initial_mode if initial_mode in _VALID_MODES else 'IDLE'
@@ -149,11 +153,15 @@ class ModeControllerNode(Node):
         self.opponent_confidence = 0.0
         self.opponent_count = 0.0
 
-        # IMU state for improved stuck/spin detection
+        # LiDAR side clearances for smart recovery steering
+        self.left_clearance = float('inf')
+        self.right_clearance = float('inf')
+
+        # IMU state
         self.imu_yaw_rate = 0.0
         self.imu_lon_accel = 0.0
 
-        # Stuck detection & recovery state
+        # Stuck detection & recovery
         self.stopped_since: float = 0.0
         self.is_reversing = False
         self.reverse_phase = 0
@@ -163,7 +171,6 @@ class ModeControllerNode(Node):
         self.recovery_count = 0
         self.recovery_steer_sign = 1.0
         self.recovery_cooldown_until: float = 0.0
-        # Guard: only use wheel_speed-based checks once data has been received
         self.wheel_speed_received = False
         self.odom_speed_received = False
         self.last_scan_time: float = 0.0
@@ -173,24 +180,24 @@ class ModeControllerNode(Node):
         self.last_odom_time: float = 0.0
         self._last_odom_xy: tuple[float, float] | None = None
         self.wrong_dir_distance_m: float = 0.0
-        # Tactical context latching (auto mode)
+        self._last_scan_stale_warn_time: float = 0.0
+        self._last_depth_guard_warn_time: float = 0.0
+
+        # Tactical context latching
         self._opp_candidate_since: float = 0.0
         self._opp_last_seen: float = 0.0
         self._opp_context_active: bool = False
 
-        # U-turn (wrong-direction recovery)
+        # Wrong direction / U-turn
         self.wrong_direction = False
         self.wrong_direction_confidence = 0.0
         self.wrong_direction_conf_ticks = 0
         self.wrong_direction_conf_active = False
         self.wrong_dir_counter = 0
         self.is_uturn = False
-        self.uturn_phase = 0        # 0=off, 1=brake, 2=reverse, 3=forward, 4=rear-blocked forward
+        self.uturn_phase = 0
         self.uturn_phase_start = 0.0
         self.uturn_steer_sign = 1.0
-        self.is_wrong_direction_correcting = False
-        self.wrong_direction_correction_since = 0.0
-        self.wrong_direction_correction_sign = 1.0
 
         # Control loop at 50 Hz
         self.create_timer(0.02, self.control_loop)
@@ -200,7 +207,7 @@ class ModeControllerNode(Node):
             f'(command_topic={self.command_topic})'
         )
 
-    # ---- Callbacks ----
+    # ── Callbacks ──
 
     def start_cb(self, msg):
         if not msg.data:
@@ -242,11 +249,23 @@ class ModeControllerNode(Node):
         if n == 0:
             return
         angles = np.linspace(msg.angle_min, msg.angle_max, n)
+
+        # Front clearance
         front_mask = np.abs(angles) < np.radians(15)
         front = ranges[front_mask]
         front = front[np.isfinite(front)]
         if len(front) > 0:
             self.min_front_dist = float(np.min(front))
+
+        # Side clearances for smart recovery steering
+        left_mask = (angles > np.radians(20)) & (angles < np.radians(90))
+        right_mask = (angles < np.radians(-20)) & (angles > np.radians(-90))
+        left_r = ranges[left_mask]
+        right_r = ranges[right_mask]
+        left_r = left_r[np.isfinite(left_r)]
+        right_r = right_r[np.isfinite(right_r)]
+        self.left_clearance = float(np.median(left_r)) if len(left_r) > 0 else 0.5
+        self.right_clearance = float(np.median(right_r)) if len(right_r) > 0 else 0.5
 
     def rear_cb(self, msg: Bool):
         self.rear_blocked = bool(msg.data)
@@ -304,7 +323,6 @@ class ModeControllerNode(Node):
         self.imu_lon_accel = float(msg.linear_acceleration.x)
 
     def set_mode(self, new_mode: str, from_external: bool = False):
-        """Externally set mode (e.g., from a service or parameter change)."""
         if from_external:
             allow_runtime_switch = bool(self.get_parameter('allow_runtime_mode_switch').value)
             lock_after_start = bool(self.get_parameter('lock_mode_after_start').value)
@@ -321,7 +339,7 @@ class ModeControllerNode(Node):
             self._reset_recovery()
             self.get_logger().info(f'Mode changed to: {new_mode}')
 
-    # ---- Control loop ----
+    # ── Control loop ──
 
     def control_loop(self):
         now = time.monotonic()
@@ -350,6 +368,7 @@ class ModeControllerNode(Node):
         self.mode_pub.publish(mode_msg)
 
     def _run_normal(self, now: float) -> DriveCommand:
+        # Auto-switch LEARNING → RACING when track is learned
         if (
             self.mode == 'LEARNING'
             and self.track_learned
@@ -387,6 +406,7 @@ class ModeControllerNode(Node):
             min_front_dist=float(self.min_front_dist),
         )
 
+        # ── Freshness guards ──
         drive_stale_sec = max(0.05, float(self.get_parameter('drive_input_stale_sec').value))
         stale_speed_cap = max(0.0, float(self.get_parameter('stale_speed_cap').value))
         has_recent_scan = self.last_scan_time > 0.0 and (now - self.last_scan_time) <= drive_stale_sec
@@ -398,9 +418,11 @@ class ModeControllerNode(Node):
         )
         has_recent_tactical = (now - self.last_tactical_time) <= tactical_timeout
 
-        # Freshness guard: stale sensor/control streams must not sustain high-speed commands.
         if self.mode in _ACTIVE_MODES:
             if not has_recent_scan and bool(self.get_parameter('halt_on_scan_stale').value):
+                if (now - self._last_scan_stale_warn_time) > 1.0:
+                    self.get_logger().warn('Holding stop: /scan_filtered is stale')
+                    self._last_scan_stale_warn_time = now
                 return DriveCommand()
 
             if self.mode in ('REACTIVE', 'MAPPING', 'LEARNING'):
@@ -409,16 +431,19 @@ class ModeControllerNode(Node):
                 input_fresh = has_recent_pursuit or has_recent_reactive or (
                     tactical_enabled and has_recent_tactical
                 )
-
             if not input_fresh and selected.linear_x > stale_speed_cap:
                 selected = DriveCommand(linear_x=stale_speed_cap, angular_z=selected.angular_z)
 
-        # Near-field depth obstacle guard.
+        # Depth obstacle guard
         if self.mode in _ACTIVE_MODES and self.depth_obstacle and selected.linear_x > 0.0:
+            if (now - self._last_depth_guard_warn_time) > 1.0:
+                self.get_logger().warn(
+                    f'Depth obstacle guard active (front_lidar={self.min_front_dist:.2f}m)'
+                )
+                self._last_depth_guard_warn_time = now
             selected = DriveCommand(linear_x=0.0, angular_z=selected.angular_z * 0.5)
 
-        # Stuck detection: only trigger recovery when we are commanding forward
-        # motion but measured speed indicates no progress.
+        # ── Stuck detection ──
         stuck_timeout = float(self.get_parameter('stuck_timeout').value)
         cmd_speed_min = float(self.get_parameter('stuck_cmd_speed_min').value)
         speed_idle_max = float(self.get_parameter('stuck_actual_speed_max').value)
@@ -427,16 +452,12 @@ class ModeControllerNode(Node):
         speed_known, actual_speed = self._current_speed(now=now, stale_sec=stale_sec)
         requested_motion = selected.linear_x > cmd_speed_min
         stalled = speed_known and actual_speed < speed_idle_max
-        has_recent_scan = self.last_scan_time > 0.0 and (now - self.last_scan_time) <= stale_sec
-        has_recent_reactive = (
-            self.last_reactive_time > 0.0 and (now - self.last_reactive_time) <= stale_sec
-        )
 
         ws_known = self.wheel_speed_received and (now - self.last_wheel_speed_time) <= stale_sec
         is_spinning = ws_known and abs(self.imu_yaw_rate) > 1.5 and self.wheel_speed < 0.10
         is_impact = ws_known and self.imu_lon_accel < -3.0 and self.wheel_speed < 0.05
 
-        # During cooldown after max recovery attempts, don't trigger more recoveries
+        # During cooldown, don't trigger more recoveries
         if self.recovery_cooldown_until > 0.0 and now < self.recovery_cooldown_until:
             self.stopped_since = 0.0
             return selected
@@ -455,66 +476,27 @@ class ModeControllerNode(Node):
         if should_start_recovery:
             if self.stopped_since == 0.0:
                 self.stopped_since = now
-            # Use shorter timeout when IMU confirms stuck condition
-            effective_timeout = stuck_timeout * 0.5 if (is_spinning or is_impact) else stuck_timeout
+            # IMU-confirmed stuck uses much shorter timeout
+            imu_factor = float(self.get_parameter('stuck_imu_timeout_factor').value)
+            effective_timeout = stuck_timeout * imu_factor if (is_spinning or is_impact) else stuck_timeout
             if (now - self.stopped_since) > effective_timeout:
                 self._start_reverse(now)
                 return self._run_reverse(now, 0.02)
         else:
-            # Car is moving or in IDLE/STOPPED — reset stuck timer
             if self.stopped_since > 0.0:
                 self.stopped_since = 0.0
                 self.recovery_count = 0
 
+        # ── Wrong-direction detection → U-turn ──
         wrong_direction_active = self._wrong_direction_active()
 
-        # Wrong-direction detection → U-turn trigger
         if self.mode in _ACTIVE_MODES and wrong_direction_active:
             self.wrong_dir_counter += 1
             early_dist = float(self.get_parameter('wrong_direction_trigger_distance_m').value)
-            correction_ticks = max(
-                1, int(self.get_parameter('wrong_direction_correction_trigger_ticks').value)
-            )
-            correction_dist = max(
-                0.1, float(self.get_parameter('wrong_direction_correction_distance_m').value)
-            )
             uturn_ticks = max(
-                correction_ticks + 1,
+                1,
                 int(self.get_parameter('wrong_direction_uturn_trigger_ticks').value),
             )
-
-            if (
-                not self.is_wrong_direction_correcting
-                and (
-                    self.wrong_dir_counter >= correction_ticks
-                    or self.wrong_dir_distance_m >= correction_dist
-                )
-            ):
-                self._start_wrong_direction_correction(now=now, selected=selected)
-
-            if self.is_wrong_direction_correcting:
-                correction_max_sec = max(
-                    0.2, float(self.get_parameter('wrong_direction_correction_max_sec').value)
-                )
-                if (
-                    (now - self.wrong_direction_correction_since) >= correction_max_sec
-                    or self.wrong_dir_counter >= uturn_ticks
-                    or self.wrong_dir_distance_m >= max(0.2, early_dist)
-                ):
-                    self._clear_wrong_direction_correction()
-                    self._start_uturn(now)
-                    return DriveCommand()
-
-                corr_speed = max(
-                    0.0, float(self.get_parameter('wrong_direction_correction_speed_m_s').value)
-                )
-                corr_steer = max(
-                    0.0, float(self.get_parameter('wrong_direction_correction_steer_rad').value)
-                )
-                return DriveCommand(
-                    linear_x=corr_speed,
-                    angular_z=corr_steer * self.wrong_direction_correction_sign,
-                )
 
             if (
                 self.wrong_dir_counter >= uturn_ticks
@@ -525,9 +507,10 @@ class ModeControllerNode(Node):
         else:
             self.wrong_dir_counter = max(0, self.wrong_dir_counter - 2)
             self.wrong_dir_distance_m = max(0.0, self.wrong_dir_distance_m - 0.05)
-            self._clear_wrong_direction_correction()
 
         return selected
+
+    # ── Recovery: reverse ──
 
     def _start_reverse(self, now: float):
         max_attempts = int(self.get_parameter('max_recovery_attempts').value)
@@ -541,21 +524,32 @@ class ModeControllerNode(Node):
                 f'cooling down for {cooldown_sec:.1f}s'
             )
             return
+
         self.is_reversing = True
         self.reverse_phase = 0
         self.reverse_phase_start = now
         self.reverse_distance = 0.0
         self.recovery_count += 1
-        self.recovery_steer_sign *= -1.0
+
+        # SMART RECOVERY: use LiDAR side clearances to choose steer direction.
+        # Steer toward the side with MORE clearance (away from the wall we hit).
+        if self.left_clearance > self.right_clearance + 0.15:
+            self.recovery_steer_sign = 1.0   # steer left (more space)
+        elif self.right_clearance > self.left_clearance + 0.15:
+            self.recovery_steer_sign = -1.0  # steer right (more space)
+        else:
+            # Similar clearance: alternate
+            self.recovery_steer_sign *= -1.0
+
         self.get_logger().info(
-            f'Recovery #{self.recovery_count}: starting reverse '
-            f'(steer sign={self.recovery_steer_sign:+.0f})'
+            f'Recovery #{self.recovery_count}: reverse '
+            f'(L={self.left_clearance:.2f}m R={self.right_clearance:.2f}m '
+            f'steer={self.recovery_steer_sign:+.0f})'
         )
 
     def _run_reverse(self, now: float, dt: float) -> DriveCommand:
         elapsed = now - self.reverse_phase_start
 
-        # Phase transitions based on timing (durations are 0.0 in sim to skip ESC arming)
         phase0_dur = float(self.get_parameter('phase0_duration').value)
         phase1_dur = float(self.get_parameter('phase1_duration').value)
         if self.reverse_phase == 0 and elapsed >= phase0_dur:
@@ -568,7 +562,6 @@ class ModeControllerNode(Node):
             self.reverse_distance = 0.0
             elapsed = 0.0
 
-        # Phase 2 end conditions
         reverse_duration = float(self.get_parameter('reverse_duration').value)
         max_reverse_dist = float(self.get_parameter('max_reverse_distance').value)
         if self.reverse_phase == 2:
@@ -579,9 +572,10 @@ class ModeControllerNode(Node):
                 self._end_reverse()
                 return DriveCommand()
 
-        # Compute steer with escalating angle and alternating direction
+        # Steer based on LiDAR-determined best direction
         base_steer = float(self.get_parameter('reverse_steer').value)
-        steer = base_steer * min(self.recovery_count, 3) * self.recovery_steer_sign
+        escalation = min(self.recovery_count, 3)
+        steer = base_steer * escalation * self.recovery_steer_sign
 
         return select_recovery_command(
             phase=self.reverse_phase,
@@ -597,15 +591,19 @@ class ModeControllerNode(Node):
         )
         self._reset_recovery()
 
-    # ---- U-turn (wrong direction recovery) ----
+    # ── U-turn (wrong direction recovery) ──
 
     def _start_uturn(self, now: float):
-        self._clear_wrong_direction_correction()
         self.is_uturn = True
-        self.uturn_phase = 1  # brake
+        self.uturn_phase = 1
         self.uturn_phase_start = now
-        # Alternate steer direction each U-turn for robustness
-        self.uturn_steer_sign *= -1.0
+        # Steer toward side with more space
+        if self.left_clearance > self.right_clearance + 0.1:
+            self.uturn_steer_sign = 1.0
+        elif self.right_clearance > self.left_clearance + 0.1:
+            self.uturn_steer_sign = -1.0
+        else:
+            self.uturn_steer_sign *= -1.0
         self.get_logger().info(
             f'U-turn triggered (wrong direction for '
             f'{self.wrong_dir_counter} ticks, steer_sign={self.uturn_steer_sign:+.0f})'
@@ -631,7 +629,6 @@ class ModeControllerNode(Node):
             return DriveCommand()
 
         if self.uturn_phase == 2:
-            # Phase 2: reverse with full lock steering
             if self.rear_blocked:
                 self.uturn_phase = 4
                 self.uturn_phase_start = now
@@ -649,7 +646,6 @@ class ModeControllerNode(Node):
             )
 
         if self.uturn_phase == 3:
-            # Phase 3: forward with full lock to finish turn
             if elapsed >= _UTURN_FORWARD_DURATION:
                 self._end_uturn()
                 return DriveCommand()
@@ -659,7 +655,6 @@ class ModeControllerNode(Node):
             )
 
         if self.uturn_phase == 4:
-            # Rear is blocked; do bounded low-speed forward-only correction.
             blocked_sec = max(0.2, float(self.get_parameter('uturn_blocked_forward_sec').value))
             if elapsed >= blocked_sec:
                 self._end_uturn()
@@ -670,7 +665,6 @@ class ModeControllerNode(Node):
                 angular_z=uturn_steer * self.uturn_steer_sign,
             )
 
-        # Shouldn't happen, but graceful fallback
         self._end_uturn()
         return DriveCommand()
 
@@ -681,6 +675,8 @@ class ModeControllerNode(Node):
         self.uturn_phase_start = 0.0
         self.wrong_dir_counter = 0
         self.wrong_dir_distance_m = 0.0
+
+    # ── Tactical context ──
 
     def _tactical_context_allows(self, now: float) -> bool:
         mode = str(self.get_parameter('tactical_context_mode').value).strip().lower()
@@ -708,6 +704,8 @@ class ModeControllerNode(Node):
                 self._opp_context_active = False
 
         return self._opp_context_active
+
+    # ── Wrong direction ──
 
     def _wrong_direction_signal_for_distance(self) -> bool:
         conf_exit = float(self.get_parameter('wrong_direction_conf_exit').value)
@@ -739,25 +737,9 @@ class ModeControllerNode(Node):
         )
         distance_persistent = self.wrong_dir_distance_m >= distance_confirm
 
-        # Backward compatibility: bool topic still works on its own.
         return self.wrong_direction or self.wrong_direction_conf_active or distance_persistent
 
-    def _start_wrong_direction_correction(self, now: float, selected: DriveCommand) -> None:
-        if self.is_wrong_direction_correcting:
-            return
-        self.is_wrong_direction_correcting = True
-        self.wrong_direction_correction_since = now
-        if abs(selected.angular_z) > 1e-3:
-            self.wrong_direction_correction_sign = -1.0 if selected.angular_z >= 0.0 else 1.0
-        else:
-            self.wrong_direction_correction_sign *= -1.0
-        self.get_logger().info(
-            f'Wrong-direction corrective steering engaged (sign={self.wrong_direction_correction_sign:+.0f})'
-        )
-
-    def _clear_wrong_direction_correction(self) -> None:
-        self.is_wrong_direction_correcting = False
-        self.wrong_direction_correction_since = 0.0
+    # ── Helpers ──
 
     def _current_speed(self, now: float, stale_sec: float) -> tuple[bool, float]:
         if (
@@ -788,7 +770,6 @@ class ModeControllerNode(Node):
         self.wrong_dir_distance_m = 0.0
         self.wrong_direction_conf_ticks = 0
         self.wrong_direction_conf_active = False
-        self._clear_wrong_direction_correction()
 
 
 def main(args=None):

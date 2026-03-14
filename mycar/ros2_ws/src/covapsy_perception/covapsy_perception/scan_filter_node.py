@@ -15,7 +15,7 @@ class ScanFilterNode(Node):
 
         self.declare_parameter("max_range", 5.0)
         self.declare_parameter("min_range", 0.15)
-        self.declare_parameter("median_window", 3)
+        self.declare_parameter("median_window", 5)
 
         self.sub = self.create_subscription(LaserScan, "/scan", self.scan_cb, 10)
         self.pub = self.create_publisher(LaserScan, "/scan_filtered", 10)

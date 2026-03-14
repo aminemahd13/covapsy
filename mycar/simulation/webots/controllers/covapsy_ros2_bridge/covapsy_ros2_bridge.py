@@ -105,10 +105,10 @@ _LANE_GAIN = math.radians(12.0)
 _SINGLE_BORDER = math.radians(8.0)
 _MAX_STEER = math.radians(18.0)
 _WRONG_WAY_CALIB_MIN_CONF = 0.45
-_DEPTH_ROI_TOP_FRAC = 0.30
-_DEPTH_ROI_BOTTOM_FRAC = 0.85
-_DEPTH_ROI_LEFT_FRAC = 0.15
-_DEPTH_ROI_RIGHT_FRAC = 0.85
+_DEPTH_ROI_TOP_FRAC = 0.20
+_DEPTH_ROI_BOTTOM_FRAC = 0.65
+_DEPTH_ROI_LEFT_FRAC = 0.28
+_DEPTH_ROI_RIGHT_FRAC = 0.72
 
 
 def _clamp(v, lo, hi):
@@ -202,9 +202,13 @@ class WebotsRosBridge(Node):
         self.declare_parameter("wrong_way_exit_conf", 0.35)
         self.declare_parameter("wrong_way_confirm_frames", 6)
         self.declare_parameter("camera_border_period_sec", 0.08)
-        self.declare_parameter("depth_obstacle_threshold_m", 0.35)
-        self.declare_parameter("depth_valid_min_m", 0.10)
+        self.declare_parameter("depth_obstacle_threshold_m", 0.28)
+        self.declare_parameter("depth_valid_min_m", 0.18)
         self.declare_parameter("depth_valid_max_m", 6.0)
+        self.declare_parameter("depth_roi_top_frac", _DEPTH_ROI_TOP_FRAC)
+        self.declare_parameter("depth_roi_bottom_frac", _DEPTH_ROI_BOTTOM_FRAC)
+        self.declare_parameter("depth_roi_left_frac", _DEPTH_ROI_LEFT_FRAC)
+        self.declare_parameter("depth_roi_right_frac", _DEPTH_ROI_RIGHT_FRAC)
 
         self.scan_pub = self.create_publisher(LaserScan, "/scan", 10)
         self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
@@ -473,10 +477,23 @@ class WebotsRosBridge(Node):
             self._depth_obstacle_cached = False
             return
 
-        y0 = int(height * _DEPTH_ROI_TOP_FRAC)
-        y1 = int(height * _DEPTH_ROI_BOTTOM_FRAC)
-        x0 = int(width * _DEPTH_ROI_LEFT_FRAC)
-        x1 = int(width * _DEPTH_ROI_RIGHT_FRAC)
+        top_frac = _clamp(float(self.get_parameter("depth_roi_top_frac").value), 0.0, 0.95)
+        bottom_frac = _clamp(
+            float(self.get_parameter("depth_roi_bottom_frac").value),
+            top_frac + 0.02,
+            1.0,
+        )
+        left_frac = _clamp(float(self.get_parameter("depth_roi_left_frac").value), 0.0, 0.95)
+        right_frac = _clamp(
+            float(self.get_parameter("depth_roi_right_frac").value),
+            left_frac + 0.02,
+            1.0,
+        )
+
+        y0 = int(height * top_frac)
+        y1 = int(height * bottom_frac)
+        x0 = int(width * left_frac)
+        x1 = int(width * right_frac)
         min_valid = max(0.01, float(self.get_parameter("depth_valid_min_m").value))
         max_valid = max(min_valid + 0.01, float(self.get_parameter("depth_valid_max_m").value))
 

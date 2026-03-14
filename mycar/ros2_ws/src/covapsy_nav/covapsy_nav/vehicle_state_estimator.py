@@ -25,18 +25,19 @@ import numpy as np
 
 # ── Default noise parameters (tuned for BNO055 + TT-02 at 1/10 scale) ──
 
-# Process noise — how much we expect the state to drift per second
+# Process noise — tuned for responsive state tracking on TT-02.
+# Tighter than before: trust sensors more, respond faster to changes.
 _Q_YAW = 0.005           # rad²/s
-_Q_SPEED = 0.20          # (m/s)²/s
-_Q_YAW_RATE = 0.80       # (rad/s)²/s
-_Q_LAT_ACCEL = 2.0       # (m/s²)²/s
-_Q_LON_ACCEL = 2.0       # (m/s²)²/s
+_Q_SPEED = 0.30          # (m/s)²/s — increased: speed changes fast on track
+_Q_YAW_RATE = 1.2        # (rad/s)²/s — increased: allow fast yaw-rate changes
+_Q_LAT_ACCEL = 3.0       # (m/s²)²/s — increased: lateral accel changes rapidly in corners
+_Q_LON_ACCEL = 3.0       # (m/s²)²/s — increased: hard braking/acceleration events
 
-# Measurement noise
-_R_GYRO_YAW_RATE = 0.01   # (rad/s)² — BNO055 in fusion mode is quite good
-_R_ACCEL_LAT = 0.15        # (m/s²)²
-_R_ACCEL_LON = 0.15        # (m/s²)²
-_R_WHEEL_SPEED = 0.04      # (m/s)²
+# Measurement noise — trust BNO055 and wheel encoder
+_R_GYRO_YAW_RATE = 0.008  # (rad/s)² — BNO055 NDOF mode is very good
+_R_ACCEL_LAT = 0.10        # (m/s²)² — tighter: trust accelerometer more
+_R_ACCEL_LON = 0.10        # (m/s²)²
+_R_WHEEL_SPEED = 0.03      # (m/s)² — tighter: optical encoder is reliable
 _R_LIDAR_YAW_RATE = 0.25   # (rad/s)² — LiDAR curvature is noisy
 
 # State dimension
