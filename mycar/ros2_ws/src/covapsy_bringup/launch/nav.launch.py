@@ -16,6 +16,7 @@ def generate_launch_description():
             DeclareLaunchArgument("deployment_mode", default_value="real"),
             DeclareLaunchArgument("max_speed_real_cap", default_value="2.0"),
             DeclareLaunchArgument("max_speed_sim_cap", default_value="2.5"),
+            DeclareLaunchArgument("vehicle_max_steering_rad", default_value="0.32"),
             DeclareLaunchArgument("enable_tactical_ai", default_value="false"),
             DeclareLaunchArgument("traffic_mode", default_value="balanced"),
             DeclareLaunchArgument("initial_mode", default_value="IDLE"),
@@ -41,12 +42,21 @@ def generate_launch_description():
             DeclareLaunchArgument("wrong_direction_conf_enter", default_value="0.55"),
             DeclareLaunchArgument("wrong_direction_conf_exit", default_value="0.35"),
             DeclareLaunchArgument("wrong_direction_confirm_ticks", default_value="6"),
+            DeclareLaunchArgument("wrong_direction_correction_trigger_ticks", default_value="8"),
+            DeclareLaunchArgument("wrong_direction_correction_distance_m", default_value="0.45"),
+            DeclareLaunchArgument("wrong_direction_correction_speed_m_s", default_value="0.18"),
+            DeclareLaunchArgument("wrong_direction_correction_steer_rad", default_value="0.22"),
+            DeclareLaunchArgument("wrong_direction_correction_max_sec", default_value="0.70"),
+            DeclareLaunchArgument("wrong_direction_uturn_trigger_ticks", default_value="20"),
             DeclareLaunchArgument("track_learned_handoff_confirm_sec", default_value="0.50"),
             DeclareLaunchArgument("tactical_context_mode", default_value="manual"),
             DeclareLaunchArgument("tactical_opp_conf_threshold", default_value="0.45"),
             DeclareLaunchArgument("tactical_opp_count_threshold", default_value="0.5"),
             DeclareLaunchArgument("tactical_opp_persist_sec", default_value="0.60"),
             DeclareLaunchArgument("tactical_clear_persist_sec", default_value="1.20"),
+            DeclareLaunchArgument("tactical_input_stale_sec", default_value="0.35"),
+            DeclareLaunchArgument("tactical_opponent_stale_sec", default_value="0.45"),
+            DeclareLaunchArgument("tactical_camera_stale_sec", default_value="0.35"),
             DeclareLaunchArgument("reactive_far_center_gain", default_value="0.35"),
             DeclareLaunchArgument("reactive_camera_center_gain", default_value="0.25"),
             DeclareLaunchArgument("reactive_far_weight_min", default_value="0.10"),
@@ -83,6 +93,12 @@ def generate_launch_description():
             DeclareLaunchArgument("pursuit_direction_guard_max_backward_index_jump", default_value="8"),
             DeclareLaunchArgument("pursuit_direction_guard_relocalization_distance_m", default_value="0.90"),
             DeclareLaunchArgument("pursuit_direction_guard_fallback_speed_m_s", default_value="0.20"),
+            DeclareLaunchArgument("pursuit_turn_entry_curvature_ref", default_value="0.65"),
+            DeclareLaunchArgument("pursuit_turn_entry_curvature_brake_gain", default_value="0.50"),
+            DeclareLaunchArgument("pursuit_turn_entry_ttc_extra_sec", default_value="0.45"),
+            DeclareLaunchArgument("border_wrong_way_conf_enter", default_value="0.55"),
+            DeclareLaunchArgument("border_wrong_way_conf_exit", default_value="0.35"),
+            DeclareLaunchArgument("border_wrong_way_confirm_frames", default_value="6"),
             DeclareLaunchArgument("tactical_near_weight_base", default_value="0.35"),
             DeclareLaunchArgument("tactical_near_weight_min", default_value="0.20"),
             DeclareLaunchArgument("tactical_near_weight_max", default_value="0.90"),
@@ -125,6 +141,7 @@ def generate_launch_description():
                         "max_speed_real_cap": LaunchConfiguration("max_speed_real_cap"),
                         "max_speed_sim_cap": LaunchConfiguration("max_speed_sim_cap"),
                         "steering_slew_rate": 0.07,
+                        "max_steering": LaunchConfiguration("vehicle_max_steering_rad"),
                         "ttc_target_sec": 1.2,
                         "use_ai_speed": True,
                         "use_imu_fusion": True,
@@ -202,6 +219,7 @@ def generate_launch_description():
                         "deployment_mode": LaunchConfiguration("deployment_mode"),
                         "max_speed_real_cap": LaunchConfiguration("max_speed_real_cap"),
                         "max_speed_sim_cap": LaunchConfiguration("max_speed_sim_cap"),
+                        "max_steering": LaunchConfiguration("vehicle_max_steering_rad"),
                         "steering_slew_rate": 0.06,
                         "scan_front_half_angle_deg": 20.0,
                         "ttc_target_sec": 1.2,
@@ -218,6 +236,15 @@ def generate_launch_description():
                         "direction_guard_fallback_speed_m_s": LaunchConfiguration(
                             "pursuit_direction_guard_fallback_speed_m_s"
                         ),
+                        "turn_entry_curvature_ref": LaunchConfiguration(
+                            "pursuit_turn_entry_curvature_ref"
+                        ),
+                        "turn_entry_curvature_brake_gain": LaunchConfiguration(
+                            "pursuit_turn_entry_curvature_brake_gain"
+                        ),
+                        "turn_entry_ttc_extra_sec": LaunchConfiguration(
+                            "pursuit_turn_entry_ttc_extra_sec"
+                        ),
                     }
                 ],
                 output="screen",
@@ -227,6 +254,15 @@ def generate_launch_description():
                 executable="border_detect_node",
                 name="border_detect",
                 condition=IfCondition(LaunchConfiguration("enable_border_detect")),
+                parameters=[
+                    {
+                        "wrong_way_enter_conf": LaunchConfiguration("border_wrong_way_conf_enter"),
+                        "wrong_way_exit_conf": LaunchConfiguration("border_wrong_way_conf_exit"),
+                        "wrong_way_confirm_frames": LaunchConfiguration(
+                            "border_wrong_way_confirm_frames"
+                        ),
+                    }
+                ],
                 output="screen",
             ),
             Node(
@@ -254,6 +290,7 @@ def generate_launch_description():
                         "max_speed_real_cap": LaunchConfiguration("max_speed_real_cap"),
                         "max_speed_sim_cap": LaunchConfiguration("max_speed_sim_cap"),
                         "traffic_mode": LaunchConfiguration("traffic_mode"),
+                        "max_steering": LaunchConfiguration("vehicle_max_steering_rad"),
                         "enable_predictive_tracking": True,
                         "near_weight_base": LaunchConfiguration("tactical_near_weight_base"),
                         "near_weight_min": LaunchConfiguration("tactical_near_weight_min"),
@@ -270,6 +307,9 @@ def generate_launch_description():
                         "near_weight_steer_disagreement_boost": LaunchConfiguration(
                             "tactical_near_weight_steer_disagreement_boost"
                         ),
+                        "input_stale_sec": LaunchConfiguration("tactical_input_stale_sec"),
+                        "opponent_stale_sec": LaunchConfiguration("tactical_opponent_stale_sec"),
+                        "camera_stale_sec": LaunchConfiguration("tactical_camera_stale_sec"),
                     }
                 ],
                 output="screen",
@@ -345,6 +385,25 @@ def generate_launch_description():
                         "wrong_direction_confirm_ticks": LaunchConfiguration(
                             "wrong_direction_confirm_ticks"
                         ),
+                        "wrong_direction_correction_trigger_ticks": LaunchConfiguration(
+                            "wrong_direction_correction_trigger_ticks"
+                        ),
+                        "wrong_direction_correction_distance_m": LaunchConfiguration(
+                            "wrong_direction_correction_distance_m"
+                        ),
+                        "wrong_direction_correction_speed_m_s": LaunchConfiguration(
+                            "wrong_direction_correction_speed_m_s"
+                        ),
+                        "wrong_direction_correction_steer_rad": LaunchConfiguration(
+                            "wrong_direction_correction_steer_rad"
+                        ),
+                        "wrong_direction_correction_max_sec": LaunchConfiguration(
+                            "wrong_direction_correction_max_sec"
+                        ),
+                        "wrong_direction_uturn_trigger_ticks": LaunchConfiguration(
+                            "wrong_direction_uturn_trigger_ticks"
+                        ),
+                        "uturn_steer": LaunchConfiguration("vehicle_max_steering_rad"),
                         "track_learned_handoff_confirm_sec": LaunchConfiguration(
                             "track_learned_handoff_confirm_sec"
                         ),

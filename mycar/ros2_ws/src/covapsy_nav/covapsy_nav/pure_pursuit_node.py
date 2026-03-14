@@ -42,9 +42,12 @@ class PurePursuitNode(Node):
         self.declare_parameter('lookahead_max', 1.5)
         self.declare_parameter('speed_factor', 0.3)
         self.declare_parameter('max_speed', 2.5)
-        self.declare_parameter('max_steering', 0.4)
+        self.declare_parameter('max_steering', 0.32)
         self.declare_parameter('steering_slew_rate', 0.08)
         self.declare_parameter('ttc_target_sec', 1.3)
+        self.declare_parameter('turn_entry_curvature_ref', 0.65)
+        self.declare_parameter('turn_entry_curvature_brake_gain', 0.50)
+        self.declare_parameter('turn_entry_ttc_extra_sec', 0.45)
         self.declare_parameter('race_profile', 'RACE_STABLE')
         self.declare_parameter('deployment_mode', 'real')
         self.declare_parameter('max_speed_real_cap', 2.0)
@@ -175,12 +178,10 @@ class PurePursuitNode(Node):
                 looped=looped_path,
             )
         if target_idx is None:
-            fallback_speed = min(
-                float(max_speed),
-                max(0.0, float(self.get_parameter('direction_guard_fallback_speed_m_s').value)),
-            )
             cmd = Twist()
-            cmd.linear.x = float(fallback_speed)
+            # No forward-valid target: publish stop so mode arbitration can
+            # safely fall back to reactive command selection.
+            cmd.linear.x = 0.0
             cmd.angular.z = 0.0
             self.cmd_pub.publish(cmd)
             return
@@ -208,17 +209,25 @@ class PurePursuitNode(Node):
         steering = max(self.prev_steering - slew_rate, min(self.prev_steering + slew_rate, steering))
         self.prev_steering = steering
 
+        turn_entry_norm = self._upcoming_curvature_norm(target_idx=target_idx, looped=looped_path)
+        turn_brake_gain = max(0.0, min(0.9, float(
+            self.get_parameter('turn_entry_curvature_brake_gain').value
+        )))
+        turn_entry_factor = max(0.20, 1.0 - turn_brake_gain * turn_entry_norm)
+
         # Speed: curvature + front free-space + TTC constrained.
         curvature_factor = 1.0 - 0.7 * abs(steering) / max(max_steer, 1e-6)
         free_space_factor = min(1.0, self.min_front_dist / 2.0)
-        speed = max_speed * curvature_factor * free_space_factor
+        speed = max_speed * curvature_factor * free_space_factor * turn_entry_factor
         speed = max(0.0, speed)
         ttc_target = max(float(self.get_parameter('ttc_target_sec').value), 0.2)
+        ttc_target += max(0.0, float(self.get_parameter('turn_entry_ttc_extra_sec').value)) * turn_entry_norm
         ttc = self.min_front_dist / max(speed, 0.05)
         if ttc < ttc_target:
             speed = min(speed, self.min_front_dist / ttc_target)
         if self.min_front_dist > 0.8:
-            speed = max(0.3, speed)
+            speed_floor = 0.12 + 0.18 * (1.0 - turn_entry_norm)
+            speed = max(speed_floor, speed)
         speed = min(max_speed, speed)
 
         cmd = Twist()
@@ -235,6 +244,43 @@ class PurePursuitNode(Node):
         siny_cosp = 2.0 * (w * z + x * y)
         cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
         return math.atan2(siny_cosp, cosy_cosp)
+
+    def _upcoming_curvature_norm(self, target_idx: int, looped: bool) -> float:
+        if self.path is None or len(self.path) < 5:
+            return 0.0
+        n = len(self.path)
+        horizon_pts = min(7, n - 1)
+        max_curvature = 0.0
+        for k in range(horizon_pts):
+            i0 = target_idx + k
+            i1 = i0 + 1
+            i2 = i0 + 2
+            if looped:
+                i0 %= n
+                i1 %= n
+                i2 %= n
+            elif i2 >= n:
+                break
+
+            p0 = self.path[i0]
+            p1 = self.path[i1]
+            p2 = self.path[i2]
+            d1x = p1[0] - p0[0]
+            d1y = p1[1] - p0[1]
+            d2x = p2[0] - p1[0]
+            d2y = p2[1] - p1[1]
+            cross = abs(d1x * d2y - d1y * d2x)
+            l1 = math.hypot(d1x, d1y)
+            l2 = math.hypot(d2x, d2y)
+            l3 = math.hypot(p2[0] - p0[0], p2[1] - p0[1])
+            denom = l1 * l2 * l3
+            if denom <= 1e-6:
+                continue
+            curvature = 2.0 * cross / denom
+            max_curvature = max(max_curvature, curvature)
+
+        curv_ref = max(0.05, float(self.get_parameter('turn_entry_curvature_ref').value))
+        return float(np.clip(max_curvature / curv_ref, 0.0, 1.0))
 
 
 def main(args=None):

@@ -111,6 +111,22 @@ def test_find_forward_lookahead_index_skips_behind_targets():
     assert idx in (2, 3)
 
 
+def test_find_forward_lookahead_index_returns_none_when_no_forward_target():
+    # Car at x=2 facing +x. All waypoints are behind in local frame.
+    path = [(0.0, 0.0), (0.8, 0.1), (1.2, -0.1)]
+    idx = find_forward_lookahead_index(
+        path=path,
+        start_idx=0,
+        lookahead_dist=0.3,
+        looped=False,
+        pose_x=2.0,
+        pose_y=0.0,
+        yaw_rad=0.0,
+        min_forward_x_m=0.05,
+    )
+    assert idx is None
+
+
 def test_to_vehicle_frame_basic_transform():
     local_x, local_y = to_vehicle_frame(
         target_x=2.0,

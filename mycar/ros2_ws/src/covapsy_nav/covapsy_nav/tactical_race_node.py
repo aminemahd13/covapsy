@@ -55,7 +55,7 @@ class TacticalRaceNode(Node):
         self.declare_parameter("opponent_detect_range", 2.8)
         self.declare_parameter("camera_weight", 0.20)
         self.declare_parameter("target_ttc_sec", 1.35)
-        self.declare_parameter("max_steering", 0.5)
+        self.declare_parameter("max_steering", 0.32)
         self.declare_parameter("pass_lock_sec", 0.65)
         self.declare_parameter("steering_bias_gain", 0.18)
         self.declare_parameter("enable_predictive_tracking", True)
@@ -70,6 +70,9 @@ class TacticalRaceNode(Node):
         self.declare_parameter("opponent_presence_exit_conf", 0.26)
         self.declare_parameter("opponent_presence_hold_sec", 0.60)
         self.declare_parameter("opponent_presence_min_count", 0.5)
+        self.declare_parameter("input_stale_sec", 0.35)
+        self.declare_parameter("opponent_stale_sec", 0.45)
+        self.declare_parameter("camera_stale_sec", 0.35)
 
         self.reactive_cmd = Twist()
         self.pursuit_cmd = Twist()
@@ -82,6 +85,12 @@ class TacticalRaceNode(Node):
         self.opponent_count = 0.0
         self.opponent_presence_active = False
         self.opponent_last_seen = 0.0
+        self.last_reactive_time = 0.0
+        self.last_pursuit_time = 0.0
+        self.last_scan_time = 0.0
+        self.last_camera_time = 0.0
+        self.last_opp_conf_time = 0.0
+        self.last_opp_count_time = 0.0
 
         # Kalman tracker for multi-frame opponent prediction
         self.tracker: OpponentTracker | None = None
@@ -105,36 +114,45 @@ class TacticalRaceNode(Node):
 
     def reactive_cb(self, msg: Twist):
         self.reactive_cmd = msg
+        self.last_reactive_time = time.monotonic()
 
     def pursuit_cb(self, msg: Twist):
         self.pursuit_cmd = msg
+        self.last_pursuit_time = time.monotonic()
 
     def scan_cb(self, msg: LaserScan):
         self.scan_msg = msg
+        self.last_scan_time = time.monotonic()
 
     def odom_cb(self, msg: Odometry):
         self.odom_msg = msg
 
     def camera_cb(self, msg: Float32):
         self.camera_offset = float(msg.data)
+        self.last_camera_time = time.monotonic()
 
     def opp_conf_cb(self, msg: Float32):
         self.external_opp_conf = clamp(msg.data, 0.0, 1.0)
+        self.last_opp_conf_time = time.monotonic()
 
     def opp_count_cb(self, msg: Float32):
         self.opponent_count = max(0.0, float(msg.data))
+        self.last_opp_count_time = time.monotonic()
 
     def _blended_base_command(
         self,
         front_min: float,
         confidence: float,
         max_steering: float,
+        far_command_fresh: bool,
     ) -> tuple[float, float]:
         near_speed = float(self.reactive_cmd.linear.x)
         near_steer = float(self.reactive_cmd.angular.z)
         far_speed = float(self.pursuit_cmd.linear.x)
         far_steer = float(self.pursuit_cmd.angular.z)
         far_valid = (
+            far_command_fresh
+            and
             math.isfinite(far_speed)
             and math.isfinite(far_steer)
             and far_speed > 0.05
@@ -195,6 +213,30 @@ class TacticalRaceNode(Node):
         return front_min, left_clear, right_clear, lidar_conf
 
     def control_loop(self):
+        now = time.monotonic()
+        input_stale_sec = max(0.05, float(self.get_parameter("input_stale_sec").value))
+        opp_stale_sec = max(0.05, float(self.get_parameter("opponent_stale_sec").value))
+        cam_stale_sec = max(0.05, float(self.get_parameter("camera_stale_sec").value))
+
+        scan_fresh = self.last_scan_time > 0.0 and (now - self.last_scan_time) <= input_stale_sec
+        reactive_fresh = (
+            self.last_reactive_time > 0.0 and (now - self.last_reactive_time) <= input_stale_sec
+        )
+        pursuit_fresh = (
+            self.last_pursuit_time > 0.0 and (now - self.last_pursuit_time) <= input_stale_sec
+        )
+        if not scan_fresh or not reactive_fresh:
+            self.cmd_pub.publish(Twist())
+            return
+
+        camera_fresh = self.last_camera_time > 0.0 and (now - self.last_camera_time) <= cam_stale_sec
+        opp_conf_fresh = self.last_opp_conf_time > 0.0 and (now - self.last_opp_conf_time) <= opp_stale_sec
+        opp_count_fresh = (
+            self.last_opp_count_time > 0.0 and (now - self.last_opp_count_time) <= opp_stale_sec
+        )
+        external_opp_conf = self.external_opp_conf if opp_conf_fresh else 0.0
+        opponent_count = self.opponent_count if opp_count_fresh else 0.0
+
         profile_cap = resolve_profile_speed_cap(
             race_profile=str(self.get_parameter("race_profile").value),
             deployment_mode=str(self.get_parameter("deployment_mode").value),
@@ -213,23 +255,27 @@ class TacticalRaceNode(Node):
 
         front_min, left_clear, right_clear, lidar_conf = self._scan_metrics()
         # Camera offset acts as a lightweight confirmation prior.
-        camera_conf = clamp(1.0 - abs(self.camera_offset), 0.0, 1.0)
+        camera_conf = clamp(1.0 - abs(self.camera_offset), 0.0, 1.0) if camera_fresh else 0.0
         confidence = max(
             fused_opponent_confidence(
                 lidar_conf=lidar_conf,
                 camera_conf=camera_conf,
                 camera_weight=float(self.get_parameter("camera_weight").value),
             ),
-            self.external_opp_conf,
+            external_opp_conf,
         )
         base_speed, base_steer = self._blended_base_command(
             front_min=front_min,
             confidence=confidence,
             max_steering=max_steering,
+            far_command_fresh=pursuit_fresh,
         )
 
-        now = time.monotonic()
-        opponent_present = self._opponent_presence(confidence=confidence, now=now)
+        opponent_present = self._opponent_presence(
+            confidence=confidence,
+            now=now,
+            opponent_count=opponent_count,
+        )
         side = select_passing_side(
             front_dist=front_min,
             left_clear=left_clear,
@@ -302,14 +348,14 @@ class TacticalRaceNode(Node):
         cmd.angular.z = float(steer)
         self.cmd_pub.publish(cmd)
 
-    def _opponent_presence(self, confidence: float, now: float) -> bool:
+    def _opponent_presence(self, confidence: float, now: float, opponent_count: float) -> bool:
         enter_conf = float(self.get_parameter("opponent_presence_enter_conf").value)
         exit_conf = float(self.get_parameter("opponent_presence_exit_conf").value)
         hold_sec = float(self.get_parameter("opponent_presence_hold_sec").value)
         min_count = float(self.get_parameter("opponent_presence_min_count").value)
 
-        has_strong_signal = confidence >= enter_conf or self.opponent_count >= min_count
-        has_weak_signal = confidence >= exit_conf or self.opponent_count >= min_count
+        has_strong_signal = confidence >= enter_conf or opponent_count >= min_count
+        has_weak_signal = confidence >= exit_conf or opponent_count >= min_count
         if has_strong_signal:
             self.opponent_presence_active = True
             self.opponent_last_seen = now

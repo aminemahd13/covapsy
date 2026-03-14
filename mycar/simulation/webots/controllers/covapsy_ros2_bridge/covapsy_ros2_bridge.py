@@ -1,7 +1,8 @@
 """ROS2 bridge controller for Webots TT-02 simulation.
 
 This controller connects one Webots car to the ROS2 stack:
-- Publishes /scan, /odom, /wheel_speed, /rear_obstacle, /mcu_status
+- Publishes /scan, /odom, /wheel_speed, /rear_obstacle, /mcu_status,
+  /depth_front_dist, /depth_obstacle
 - Subscribes to /cmd_vel
 - Applies command timeout watchdog
 """
@@ -104,6 +105,10 @@ _LANE_GAIN = math.radians(12.0)
 _SINGLE_BORDER = math.radians(8.0)
 _MAX_STEER = math.radians(18.0)
 _WRONG_WAY_CALIB_MIN_CONF = 0.45
+_DEPTH_ROI_TOP_FRAC = 0.30
+_DEPTH_ROI_BOTTOM_FRAC = 0.85
+_DEPTH_ROI_LEFT_FRAC = 0.15
+_DEPTH_ROI_RIGHT_FRAC = 0.85
 
 
 def _clamp(v, lo, hi):
@@ -175,6 +180,7 @@ class WebotsRosBridge(Node):
         imu: InertialUnit,
         step_time_s: float,
         rgb_camera=None,
+        depth_sensor=None,
     ):
         super().__init__("covapsy_webots_bridge")
         self.driver = driver
@@ -182,6 +188,7 @@ class WebotsRosBridge(Node):
         self.gps = gps
         self.imu = imu
         self.rgb_camera = rgb_camera
+        self.depth_sensor = depth_sensor
         self.step_time_s = max(float(step_time_s), 1e-3)
 
         self.declare_parameter("max_speed_m_s", 2.5)
@@ -195,12 +202,17 @@ class WebotsRosBridge(Node):
         self.declare_parameter("wrong_way_exit_conf", 0.35)
         self.declare_parameter("wrong_way_confirm_frames", 6)
         self.declare_parameter("camera_border_period_sec", 0.08)
+        self.declare_parameter("depth_obstacle_threshold_m", 0.35)
+        self.declare_parameter("depth_valid_min_m", 0.10)
+        self.declare_parameter("depth_valid_max_m", 6.0)
 
         self.scan_pub = self.create_publisher(LaserScan, "/scan", 10)
         self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
         self.speed_pub = self.create_publisher(Float32, "/wheel_speed", 10)
         self.rear_pub = self.create_publisher(Bool, "/rear_obstacle", 10)
         self.status_pub = self.create_publisher(String, "/mcu_status", 10)
+        self.depth_front_pub = self.create_publisher(Float32, "/depth_front_dist", 10)
+        self.depth_obstacle_pub = self.create_publisher(Bool, "/depth_obstacle", 10)
         self.camera_steer_pub = self.create_publisher(Float32, "/camera_steering_offset", 10)
         self.wrong_dir_pub = self.create_publisher(Bool, "/wrong_direction", 10)
         self.wrong_dir_conf_pub = self.create_publisher(Float32, "/wrong_direction_confidence", 10)
@@ -220,6 +232,9 @@ class WebotsRosBridge(Node):
         self._cam_steer_cached = 0.0
         self._cam_conf_cached = 0.0
         self._cam_expected_red_on_left: Optional[bool] = None
+        self._depth_next_eval_time = 0.0
+        self._depth_front_dist_cached = float("inf")
+        self._depth_obstacle_cached = False
         self._wrong_way_active = False
         self._wrong_way_confirm_count = 0
         self._wrong_way_confidence = 0.0
@@ -326,6 +341,15 @@ class WebotsRosBridge(Node):
             self.status_pub.publish(status)
             self.last_status_time = now_mono
 
+        # Depth sensing from Webots RealSenseDepth rangefinder.
+        self._update_depth_state(now_mono)
+        depth_msg = Float32()
+        depth_msg.data = float(self._depth_front_dist_cached)
+        self.depth_front_pub.publish(depth_msg)
+        depth_obs_msg = Bool()
+        depth_obs_msg.data = bool(self._depth_obstacle_cached)
+        self.depth_obstacle_pub.publish(depth_obs_msg)
+
         # Camera steering and wrong-way detection, decimated to reduce Webots load.
         self._update_camera_direction_state(now_mono)
 
@@ -418,6 +442,63 @@ class WebotsRosBridge(Node):
         ):
             self._wrong_way_active = False
 
+    def _update_depth_state(self, now_mono: float) -> None:
+        period = max(0.02, float(self.get_parameter("camera_border_period_sec").value))
+        if now_mono < self._depth_next_eval_time:
+            return
+        self._depth_next_eval_time = now_mono + period
+
+        if not CAM_AVAILABLE or self.depth_sensor is None:
+            self._depth_front_dist_cached = float("inf")
+            self._depth_obstacle_cached = False
+            return
+
+        try:
+            raw = self.depth_sensor.getRangeImage()
+            width = int(self.depth_sensor.getWidth())
+            height = int(self.depth_sensor.getHeight())
+        except Exception:
+            self._depth_front_dist_cached = float("inf")
+            self._depth_obstacle_cached = False
+            return
+
+        if raw is None or width <= 0 or height <= 0:
+            self._depth_front_dist_cached = float("inf")
+            self._depth_obstacle_cached = False
+            return
+
+        values = list(raw)
+        if len(values) < width * height:
+            self._depth_front_dist_cached = float("inf")
+            self._depth_obstacle_cached = False
+            return
+
+        y0 = int(height * _DEPTH_ROI_TOP_FRAC)
+        y1 = int(height * _DEPTH_ROI_BOTTOM_FRAC)
+        x0 = int(width * _DEPTH_ROI_LEFT_FRAC)
+        x1 = int(width * _DEPTH_ROI_RIGHT_FRAC)
+        min_valid = max(0.01, float(self.get_parameter("depth_valid_min_m").value))
+        max_valid = max(min_valid + 0.01, float(self.get_parameter("depth_valid_max_m").value))
+
+        valid: list[float] = []
+        for y in range(y0, y1, 2):
+            row = y * width
+            for x in range(x0, x1, 2):
+                d = float(values[row + x])
+                if math.isfinite(d) and min_valid < d < max_valid:
+                    valid.append(d)
+
+        if not valid:
+            front_dist = max_valid
+        else:
+            valid.sort()
+            pct_idx = int(max(0, min(len(valid) - 1, round(0.05 * (len(valid) - 1)))))
+            front_dist = valid[pct_idx]
+
+        self._depth_front_dist_cached = float(front_dist)
+        threshold = max(0.05, float(self.get_parameter("depth_obstacle_threshold_m").value))
+        self._depth_obstacle_cached = bool(front_dist < threshold)
+
 
 def main() -> None:
     driver = Driver()
@@ -436,12 +517,21 @@ def main() -> None:
 
     # Try to enable RGB camera for border detection
     rgb_camera = None
+    depth_sensor = None
     if CAM_AVAILABLE:
         for name in _RGB_NAMES:
             try:
                 cam = Camera(name)
                 cam.enable(sensor_time_step)
                 rgb_camera = cam
+                break
+            except Exception:
+                continue
+        for name in _DEPTH_NAMES:
+            try:
+                depth = RangeFinder(name)
+                depth.enable(sensor_time_step)
+                depth_sensor = depth
                 break
             except Exception:
                 continue
@@ -461,6 +551,7 @@ def main() -> None:
         imu=imu,
         step_time_s=sensor_time_step / 1000.0,
         rgb_camera=rgb_camera,
+        depth_sensor=depth_sensor,
     )
     try:
         while driver.step() != -1:
