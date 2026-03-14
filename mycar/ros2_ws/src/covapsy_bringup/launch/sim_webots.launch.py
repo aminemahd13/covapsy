@@ -27,6 +27,7 @@ def generate_launch_description():
             DeclareLaunchArgument("enable_runtime_logs", default_value="false"),
             DeclareLaunchArgument("runtime_log_period_s", default_value="1.0"),
             DeclareLaunchArgument("enable_track_learning", default_value="true"),
+            DeclareLaunchArgument("enable_border_detect", default_value="true"),
             DeclareLaunchArgument("enable_depth_obstacle", default_value="true"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
@@ -48,6 +49,7 @@ def generate_launch_description():
                     "enable_runtime_logs": LaunchConfiguration("enable_runtime_logs"),
                     "runtime_log_period_s": LaunchConfiguration("runtime_log_period_s"),
                     "enable_track_learning": LaunchConfiguration("enable_track_learning"),
+                    "enable_border_detect": LaunchConfiguration("enable_border_detect"),
                     "enable_depth_obstacle": LaunchConfiguration("enable_depth_obstacle"),
                     # Sim-specific recovery: skip ESC brake/neutral arming phases
                     "phase0_duration": "0.0",

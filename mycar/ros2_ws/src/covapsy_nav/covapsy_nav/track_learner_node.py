@@ -17,9 +17,12 @@ import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
+from covapsy_nav.track_persistence_utils import apply_saved_track_loaded
+from covapsy_nav.track_persistence_utils import resolve_track_save_path
 from covapsy_nav.track_learner import TrackLearner
+from covapsy_nav.track_path_store import normalize_track_direction
 
 
 class TrackLearnerNode(Node):
@@ -34,6 +37,13 @@ class TrackLearnerNode(Node):
         self.declare_parameter("smoothing_window", 7)
         self.declare_parameter("apex_iterations", 5)
         self.declare_parameter("auto_publish", True)
+        self.declare_parameter("enable_persistence", True)
+        self.declare_parameter("storage_dir", "~/.ros/covapsy")
+        self.declare_parameter("red_left_filename", "racing_path_red_left.json")
+        self.declare_parameter("red_right_filename", "racing_path_red_right.json")
+        self.declare_parameter("unknown_filename", "racing_path_unknown.json")
+        self.declare_parameter("direction_topic", "/track_direction")
+        self.declare_parameter("saved_track_loaded_topic", "/saved_track_loaded")
 
         closure_tol = float(self.get_parameter("closure_tolerance").value)
         if closure_tol <= 0.0:
@@ -46,8 +56,22 @@ class TrackLearnerNode(Node):
         )
         self._required_laps = int(self.get_parameter("required_laps").value)
         self._published = False
+        self._track_direction = "unknown"
+        self._saved_track_loaded = False
 
         self.create_subscription(Odometry, "/odom", self.odom_cb, 20)
+        self.create_subscription(
+            String,
+            str(self.get_parameter("direction_topic").value),
+            self.direction_cb,
+            10,
+        )
+        self.create_subscription(
+            Bool,
+            str(self.get_parameter("saved_track_loaded_topic").value),
+            self.saved_track_loaded_cb,
+            10,
+        )
         self.path_pub = self.create_publisher(Path, "/racing_path", 10)
         self.learned_pub = self.create_publisher(Bool, "/track_learned", 10)
 
@@ -55,7 +79,22 @@ class TrackLearnerNode(Node):
             f"Track learner started (need {self._required_laps} lap(s))"
         )
 
+    def direction_cb(self, msg: String) -> None:
+        self._track_direction = normalize_track_direction(msg.data)
+
+    def saved_track_loaded_cb(self, msg: Bool) -> None:
+        next_state = apply_saved_track_loaded(self._saved_track_loaded, bool(msg.data))
+        if next_state and not self._saved_track_loaded:
+            self._saved_track_loaded = next_state
+            self._published = True
+            self.get_logger().info(
+                "Saved track was loaded from disk; pausing live learning for this run"
+            )
+
     def odom_cb(self, msg: Odometry):
+        if self._saved_track_loaded:
+            return
+
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
 
@@ -74,7 +113,27 @@ class TrackLearnerNode(Node):
         ):
             self._publish_racing_line()
 
-    def _publish_racing_line(self):
+    def _save_racing_line(self) -> None:
+        if not bool(self.get_parameter("enable_persistence").value):
+            return
+        save_path = resolve_track_save_path(
+            storage_dir=str(self.get_parameter("storage_dir").value),
+            direction=self._track_direction,
+            red_left_filename=str(self.get_parameter("red_left_filename").value),
+            red_right_filename=str(self.get_parameter("red_right_filename").value),
+            unknown_filename=str(self.get_parameter("unknown_filename").value),
+        )
+        try:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            self.learner.export_json(str(save_path))
+        except Exception as exc:
+            self.get_logger().warn(f"Failed to persist racing line to '{save_path}': {exc}")
+            return
+        self.get_logger().info(
+            f"Persisted racing line to '{save_path}' (direction={self._track_direction})"
+        )
+
+    def _publish_racing_line(self) -> None:
         racing_line = self.learner.build_racing_line()
         if racing_line is None:
             self.get_logger().warn("Failed to build racing line")
@@ -98,6 +157,7 @@ class TrackLearnerNode(Node):
         learned_msg = Bool()
         learned_msg.data = True
         self.learned_pub.publish(learned_msg)
+        self._save_racing_line()
 
         self.get_logger().info(
             f"Racing line published: {len(racing_line)} waypoints"

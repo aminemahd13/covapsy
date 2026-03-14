@@ -13,10 +13,11 @@ COVAPSY border colors:
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float32, Bool
+from std_msgs.msg import Bool, Float32, String
 import numpy as np
 
 from covapsy_perception.border_detect_utils import update_wrong_way_hysteresis
+from covapsy_perception.border_detect_utils import update_track_direction_hysteresis
 
 try:
     from cv_bridge import CvBridge
@@ -53,15 +54,21 @@ class BorderDetectNode(Node):
             Bool, '/wrong_direction', 10)
         self.wrong_dir_conf_pub = self.create_publisher(
             Float32, '/wrong_direction_confidence', 10)
+        self.track_dir_pub = self.create_publisher(
+            String, '/track_direction', 10)
 
         self.declare_parameter("wrong_way_enter_conf", 0.55)
         self.declare_parameter("wrong_way_exit_conf", 0.35)
         self.declare_parameter("wrong_way_confirm_frames", 6)
+        self.declare_parameter("track_direction_confirm_frames", 4)
 
         # Expected border order: red on left, green on right (COVAPSY standard)
         self.expected_red_on_left = None
         self._wrong_way_active = False
         self._wrong_way_confirm_count = 0
+        self._track_direction = "unknown"
+        self._track_direction_candidate = "unknown"
+        self._track_direction_candidate_count = 0
 
         # HSV ranges for COVAPSY border colors (indoor fluorescent lighting)
         # GREEN (RAL 6037)
@@ -117,11 +124,13 @@ class BorderDetectNode(Node):
         # Wrong-direction confidence + hysteresis:
         # use side ordering when both borders are visible with sufficient confidence.
         conf = _clamp((red_pixels + green_pixels) / _CONF_PIXEL_REF, 0.0, 1.0)
+        observed_direction = "unknown"
         if green_cx is not None and red_cx is not None:
             conf = _clamp(conf + 0.25, 0.0, 1.0)
             separation = abs(green_cx - red_cx)
             if separation > roi_w * 0.05:  # meaningful separation
                 red_is_left = red_cx < green_cx
+                observed_direction = "red_left" if red_is_left else "red_right"
                 if self.expected_red_on_left is None and conf >= _WRONG_WAY_CALIB_MIN_CONF:
                     self.expected_red_on_left = bool(red_is_left)
                     self.get_logger().info(
@@ -138,6 +147,24 @@ class BorderDetectNode(Node):
         else:
             conf = min(conf, 0.55)
             wrong_conf = 0.0
+
+        track_confirm_frames = max(
+            1, int(self.get_parameter("track_direction_confirm_frames").value)
+        )
+        prev_track_direction = self._track_direction
+        (
+            self._track_direction,
+            self._track_direction_candidate,
+            self._track_direction_candidate_count,
+        ) = update_track_direction_hysteresis(
+            observed_direction=observed_direction,
+            active_direction=self._track_direction,
+            candidate_direction=self._track_direction_candidate,
+            candidate_count=self._track_direction_candidate_count,
+            confirm_frames=track_confirm_frames,
+        )
+        if prev_track_direction != self._track_direction and self._track_direction != "unknown":
+            self.get_logger().info(f"Track direction updated: {self._track_direction}")
 
         enter_conf = float(self.get_parameter("wrong_way_enter_conf").value)
         exit_conf = float(self.get_parameter("wrong_way_exit_conf").value)
@@ -158,6 +185,10 @@ class BorderDetectNode(Node):
         conf_msg = Float32()
         conf_msg.data = float(_clamp(wrong_conf, 0.0, 1.0))
         self.wrong_dir_conf_pub.publish(conf_msg)
+
+        direction_msg = String()
+        direction_msg.data = self._track_direction
+        self.track_dir_pub.publish(direction_msg)
 
     @staticmethod
     def _centroid_x(mask):

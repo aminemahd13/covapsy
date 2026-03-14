@@ -1,4 +1,5 @@
 from covapsy_perception.border_detect_utils import update_wrong_way_hysteresis
+from covapsy_perception.border_detect_utils import update_track_direction_hysteresis
 
 
 def test_wrong_way_hysteresis_enters_after_confirm_frames():
@@ -37,6 +38,61 @@ def test_wrong_way_hysteresis_does_not_toggle_on_single_spike():
         confirm_frames=4,
     )
     assert active is False
+    assert count == 0
+
+
+def test_track_direction_hysteresis_requires_confirmation_to_switch():
+    active = "red_left"
+    candidate = "unknown"
+    count = 0
+    for _ in range(3):
+        active, candidate, count = update_track_direction_hysteresis(
+            observed_direction="red_right",
+            active_direction=active,
+            candidate_direction=candidate,
+            candidate_count=count,
+            confirm_frames=4,
+        )
+    assert active == "red_left"
+    assert candidate == "red_right"
+    assert count == 3
+    active, candidate, count = update_track_direction_hysteresis(
+        observed_direction="red_right",
+        active_direction=active,
+        candidate_direction=candidate,
+        candidate_count=count,
+        confirm_frames=4,
+    )
+    assert active == "red_right"
+    assert candidate == "red_right"
+    assert count == 4
+
+
+def test_track_direction_hysteresis_keeps_last_known_on_unknown_input():
+    active, candidate, count = update_track_direction_hysteresis(
+        observed_direction="red_left",
+        active_direction="unknown",
+        candidate_direction="unknown",
+        candidate_count=0,
+        confirm_frames=2,
+    )
+    active, candidate, count = update_track_direction_hysteresis(
+        observed_direction="red_left",
+        active_direction=active,
+        candidate_direction=candidate,
+        candidate_count=count,
+        confirm_frames=2,
+    )
+    assert active == "red_left"
+    active, candidate, count = update_track_direction_hysteresis(
+        observed_direction="unknown",
+        active_direction=active,
+        candidate_direction=candidate,
+        candidate_count=count,
+        confirm_frames=2,
+    )
+    assert active == "red_left"
+    assert candidate == "unknown"
     assert count == 0
 
 

@@ -81,6 +81,13 @@ def generate_launch_description():
             DeclareLaunchArgument("track_learning_smoothing_window", default_value="7"),
             DeclareLaunchArgument("track_learning_apex_iterations", default_value="5"),
             DeclareLaunchArgument("track_learning_auto_publish", default_value="true"),
+            DeclareLaunchArgument("enable_track_persistence", default_value="true"),
+            DeclareLaunchArgument("enable_saved_track_reuse", default_value="true"),
+            DeclareLaunchArgument("track_storage_dir", default_value="~/.ros/covapsy"),
+            DeclareLaunchArgument("track_file_red_left", default_value="racing_path_red_left.json"),
+            DeclareLaunchArgument("track_file_red_right", default_value="racing_path_red_right.json"),
+            DeclareLaunchArgument("track_file_unknown", default_value="racing_path_unknown.json"),
+            DeclareLaunchArgument("track_direction_confirm_frames", default_value="4"),
             DeclareLaunchArgument("pursuit_direction_guard_enabled", default_value="true"),
             DeclareLaunchArgument("pursuit_direction_guard_min_forward_x_m", default_value="0.05"),
             DeclareLaunchArgument("pursuit_direction_guard_max_backward_index_jump", default_value="8"),
@@ -221,6 +228,27 @@ def generate_launch_description():
                         "wrong_way_confirm_frames": LaunchConfiguration(
                             "border_wrong_way_confirm_frames"
                         ),
+                        "track_direction_confirm_frames": LaunchConfiguration(
+                            "track_direction_confirm_frames"
+                        ),
+                    }
+                ],
+                output="screen",
+            ),
+            # Persisted racing path loader (direction-aware, with fallback to learning)
+            Node(
+                package="covapsy_nav",
+                executable="racing_path_publisher_node",
+                name="racing_path_publisher",
+                condition=IfCondition(LaunchConfiguration("enable_saved_track_reuse")),
+                parameters=[
+                    {
+                        "use_directional_loading": True,
+                        "storage_dir": LaunchConfiguration("track_storage_dir"),
+                        "red_left_filename": LaunchConfiguration("track_file_red_left"),
+                        "red_right_filename": LaunchConfiguration("track_file_red_right"),
+                        "unknown_filename": LaunchConfiguration("track_file_unknown"),
+                        "frame_id": "odom",
                     }
                 ],
                 output="screen",
@@ -287,6 +315,11 @@ def generate_launch_description():
                         "smoothing_window": LaunchConfiguration("track_learning_smoothing_window"),
                         "apex_iterations": LaunchConfiguration("track_learning_apex_iterations"),
                         "auto_publish": LaunchConfiguration("track_learning_auto_publish"),
+                        "enable_persistence": LaunchConfiguration("enable_track_persistence"),
+                        "storage_dir": LaunchConfiguration("track_storage_dir"),
+                        "red_left_filename": LaunchConfiguration("track_file_red_left"),
+                        "red_right_filename": LaunchConfiguration("track_file_red_right"),
+                        "unknown_filename": LaunchConfiguration("track_file_unknown"),
                     }
                 ],
                 output="screen",
