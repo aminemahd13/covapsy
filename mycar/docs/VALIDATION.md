@@ -42,11 +42,15 @@ ros2 topic echo /odom --once
 ros2 topic echo /mcu_status --once
 ros2 topic echo /car_mode
 ros2 topic echo /track_learned
+ros2 topic echo /saved_track_loaded
+ros2 topic echo /track_direction
 ```
 
 Pass criteria:
 - all required topics present
 - reactive command generated in `LEARNING`
+- `/track_direction` published (`red_left` / `red_right` / `unknown`)
+- `/saved_track_loaded` reflects whether a persisted path was reused
 - `/track_learned` published after required setup lap(s)
 - mode transition to `RACING` observed on `/car_mode`
 - final `/cmd_vel` published continuously
@@ -89,6 +93,8 @@ ros2 param set /runtime_monitor enable_logs false
 ```bash
 ros2 topic echo /car_mode
 ros2 topic echo /track_learned
+ros2 topic echo /saved_track_loaded
+ros2 topic echo /track_direction
 ```
 
 Pass criteria:
@@ -97,6 +103,7 @@ Pass criteria:
 - stale command triggers stop
 - `/race_stop` immediately forces zero output
 - status includes `race_running` and `stop_latched` fields
+- saved-path reuse status visible on `/saved_track_loaded`
 - on full bringup, mode transitions `IDLE -> LEARNING -> RACING`
 
 ## 5. Safety Regression Checks
@@ -111,8 +118,9 @@ Pass criteria:
 ```bash
 python mycar/scripts/build_racing_path_from_csv.py --input setup_laps.csv --output racing_path.json
 ```
-3. Publish path before race:
+3. Optional manual override path before race:
 ```bash
 ros2 run covapsy_nav racing_path_publisher_node --ros-args -p path_file:=racing_path.json
 ```
-4. Keep race runtime autonomous after start signal (no human behavior commands).
+4. Default flow (no override needed): store/reuse direction-aware paths in `~/.ros/covapsy`.
+5. Keep race runtime autonomous after start signal (no human behavior commands).

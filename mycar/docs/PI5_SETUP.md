@@ -78,13 +78,16 @@ In competition defaults, stop is latched; relaunch for a fresh run after `/race_
 Default learning -> racing behavior in `car_full.launch.py`:
 - starts in `IDLE`
 - `/race_start` switches to `LEARNING`
-- track learning runs for required setup laps (`track_learning_required_laps:=2`)
-- auto-switch to `RACING` after `/track_learned=true` and handoff confirm delay
+- tries direction-aware saved-path reuse from `~/.ros/covapsy`
+- if missing, track learning runs for required setup laps (`track_learning_required_laps:=2`)
+- auto-switches to `RACING` after `/track_learned=true` and handoff confirm delay
 
 Monitor:
 ```bash
 ros2 topic echo /car_mode
 ros2 topic echo /track_learned
+ros2 topic echo /saved_track_loaded
+ros2 topic echo /track_direction
 ros2 topic echo /mcu_status --once
 ```
 

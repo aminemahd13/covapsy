@@ -96,8 +96,11 @@ Default behavior:
 - `initial_mode=LEARNING`
 - `start_mode=LEARNING`
 - track learning enabled (`enable_track_learning:=true`)
+- saved-path reuse enabled (`enable_saved_track_reuse:=true`)
+- border direction detection enabled (`enable_border_detect:=true`)
 - pure pursuit enabled (`enable_pure_pursuit:=true`)
-- auto handoff to `RACING` when `/track_learned=true`
+- auto reuse from `~/.ros/covapsy` when directional path exists
+- fallback live learning + auto handoff to `RACING` when `/track_learned=true`
 - no hardware bridge node
 
 ### 3. Start Webots world
@@ -120,6 +123,8 @@ Watch learning -> racing transition:
 ```bash
 ros2 topic echo /car_mode
 ros2 topic echo /track_learned
+ros2 topic echo /saved_track_loaded
+ros2 topic echo /track_direction
 ros2 topic hz /cmd_vel_pursuit
 ros2 topic echo /wrong_direction_confidence --once
 ```
@@ -129,7 +134,8 @@ Expected:
 - `/cmd_vel_reactive` is non-zero during learning.
 - `/cmd_vel` follows mode controller output.
 - `/mcu_status` contains `backend=webots_ros2;ok=1`.
-- `/car_mode` transitions from `LEARNING` to `RACING` once track learning completes.
+- `/saved_track_loaded=true` when saved directional path is reused.
+- `/car_mode` transitions from `LEARNING` to `RACING` via saved-path reuse or fallback learning.
 - `/race_stop` puts controller in `STOPPED` (latched in competition-style defaults); restart launch for a new run.
 
 ## Mode C: ROS2 Multi-Car Benchmark (Ubuntu)

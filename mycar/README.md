@@ -72,13 +72,17 @@ webots mycar/simulation/webots/worlds/Piste_CoVAPSy_2025a_multicar_ros2.wbt
 
 Learning -> racing transition in simulation (default):
 - starts in `LEARNING` (`initial_mode:=LEARNING`)
-- learns track (`track_learning_required_laps:=1`)
+- auto-detects direction from border colors (`/track_direction`)
+- tries to reuse saved path from `~/.ros/covapsy`
+- if not found, learns track (`track_learning_required_laps:=1`) and saves it
 - auto-switches to `RACING` after `/track_learned` + handoff confirmation
 
 Monitor:
 ```bash
 ros2 topic echo /car_mode
 ros2 topic echo /track_learned
+ros2 topic echo /saved_track_loaded
+ros2 topic echo /track_direction
 ```
 
 Expected checks:
@@ -131,12 +135,16 @@ In competition defaults, bridge motion input is `/cmd_vel_autonomy` and runtime 
 Learning -> racing transition on real car (`car_full.launch.py` default):
 - pre-start mode is `IDLE`
 - `/race_start` moves to `LEARNING`
-- after setup laps (`track_learning_required_laps:=2`) it auto-switches to `RACING`
+- tries to reuse saved directional path from `~/.ros/covapsy`
+- if saved path is missing, performs setup-lap learning (`track_learning_required_laps:=2`)
+- auto-switches to `RACING` after `/track_learned`
 
 Monitor:
 ```bash
 ros2 topic echo /car_mode
 ros2 topic echo /track_learned
+ros2 topic echo /saved_track_loaded
+ros2 topic echo /track_direction
 ros2 topic echo /mcu_status --once
 ```
 

@@ -55,17 +55,23 @@ ros2 topic echo /mcu_status --once
 ```bash
 ros2 topic echo /track_learned
 ```
-3. Check odometry stream exists:
+3. Check saved-path reuse status and direction:
+```bash
+ros2 topic echo /saved_track_loaded
+ros2 topic echo /track_direction
+```
+4. Check odometry stream exists:
 ```bash
 ros2 topic echo /odom --once
 ```
-4. Check current mode stream:
+5. Check current mode stream:
 ```bash
 ros2 topic echo /car_mode
 ```
-5. Verify required lap count is achievable for your run:
+6. Verify required lap count is achievable for your run:
 - simulation default `track_learning_required_laps:=1`
 - real-car full default `track_learning_required_laps:=2`
+7. If `/saved_track_loaded` stays `false`, verify `~/.ros/covapsy/racing_path_<direction>.json` exists for current direction.
 
 ### Unexpected mode switching behavior
 - Competition bringups disable runtime `/set_mode` by default.

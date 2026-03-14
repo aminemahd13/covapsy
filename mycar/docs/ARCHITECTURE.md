@@ -21,7 +21,9 @@ Core runtime chain:
 | `/cmd_vel_pursuit` | `geometry_msgs/Twist` | `pure_pursuit_node` | `mode_controller_node` |
 | `/cmd_vel_tactical` | `geometry_msgs/Twist` | `tactical_race_node` | `mode_controller_node` |
 | `/racing_path` | `nav_msgs/Path` | `track_learner_node` or `racing_path_publisher_node` | `pure_pursuit_node` |
-| `/track_learned` | `std_msgs/Bool` | `track_learner_node` | `mode_controller_node` |
+| `/track_learned` | `std_msgs/Bool` | `track_learner_node` or `racing_path_publisher_node` | `mode_controller_node` |
+| `/saved_track_loaded` | `std_msgs/Bool` | `racing_path_publisher_node` | `track_learner_node`, monitoring |
+| `/track_direction` | `std_msgs/String` | `border_detect_node` | `racing_path_publisher_node`, `track_learner_node` |
 | `/cmd_vel_autonomy` | `geometry_msgs/Twist` | `mode_controller_node` (real-car bringup) | `stm32_bridge_node` |
 | `/cmd_vel` | `geometry_msgs/Twist` | `mode_controller_node` (simulation bringup) | `covapsy_ros2_bridge` |
 | `/wheel_speed` | `std_msgs/Float32` | bridge node / sim bridge | `tft_status_node`, monitoring |
@@ -62,6 +64,8 @@ In competition bringup, bridge input defaults to `/cmd_vel_autonomy` (not `/cmd_
 - `mode_controller_node` enforces stop in `IDLE` and `STOPPED`.
 - `mode_controller_node` ignores `/set_mode` by default (`allow_runtime_mode_switch=false`).
 - `mode_controller_node` auto-switches from `LEARNING` to `RACING` after `/track_learned` handoff confirmation.
+- `racing_path_publisher_node` reuses direction-aware saved paths from `~/.ros/covapsy` and publishes `/saved_track_loaded`.
+- `track_learner_node` pauses live learning when `/saved_track_loaded=true` to avoid overwriting race runs with opponents.
 - `stm32_bridge_node` gates motion commands with `/race_start` and `/race_stop`.
 - `stm32_bridge_node` watchdog sends zero command on stale drive input.
 - Webots bridge controller applies equivalent stale-command stop behavior.
