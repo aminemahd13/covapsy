@@ -18,9 +18,12 @@ from sensor_msgs.msg import LaserScan
 import numpy as np
 
 from covapsy_nav.race_profiles import resolve_profile_speed_cap
+from covapsy_nav.pure_pursuit_utils import choose_progress_index
+from covapsy_nav.pure_pursuit_utils import find_forward_lookahead_index
 from covapsy_nav.pure_pursuit_utils import find_lookahead_index
 from covapsy_nav.pure_pursuit_utils import front_min_distance
 from covapsy_nav.pure_pursuit_utils import path_is_looped
+from covapsy_nav.pure_pursuit_utils import to_vehicle_frame
 
 try:
     import tf_transformations
@@ -47,6 +50,11 @@ class PurePursuitNode(Node):
         self.declare_parameter('max_speed_real_cap', 2.0)
         self.declare_parameter('max_speed_sim_cap', 2.5)
         self.declare_parameter('scan_front_half_angle_deg', 20.0)
+        self.declare_parameter('direction_guard_enabled', True)
+        self.declare_parameter('direction_guard_min_forward_x_m', 0.05)
+        self.declare_parameter('direction_guard_max_backward_index_jump', 8)
+        self.declare_parameter('direction_guard_relocalization_distance_m', 0.90)
+        self.declare_parameter('direction_guard_fallback_speed_m_s', 0.20)
 
         self.path_sub = self.create_subscription(
             Path, '/racing_path', self.path_cb, 10)
@@ -61,6 +69,7 @@ class PurePursuitNode(Node):
         self.current_pose = None
         self.min_front_dist = float('inf')
         self.prev_steering = 0.0
+        self.progress_idx = None
         self.create_timer(0.05, self.control_loop)  # 20 Hz
 
         if not TF_AVAILABLE:
@@ -75,6 +84,7 @@ class PurePursuitNode(Node):
             (p.pose.position.x, p.pose.position.y)
             for p in msg.poses
         ]
+        self.progress_idx = None
         self.get_logger().info(f'Received racing path with {len(self.path)} waypoints')
 
     def odom_cb(self, msg: Odometry):
@@ -122,21 +132,69 @@ class PurePursuitNode(Node):
         path_arr = np.array(self.path)
         dists = np.hypot(path_arr[:, 0] - px, path_arr[:, 1] - py)
         nearest_idx = int(np.argmin(dists))
+        nearest_dist = float(dists[nearest_idx])
 
         looped_path = path_is_looped(self.path, closure_tol=max(0.4, float(ld_min)))
-        target_idx = find_lookahead_index(
-            path=self.path,
-            start_idx=nearest_idx,
-            lookahead_dist=float(ld),
-            looped=looped_path,
-        )
+        guard_enabled = bool(self.get_parameter('direction_guard_enabled').value)
+        if guard_enabled:
+            progress_idx = choose_progress_index(
+                nearest_idx=nearest_idx,
+                prev_progress_idx=self.progress_idx,
+                path_length=len(self.path),
+                looped=looped_path,
+                nearest_dist=nearest_dist,
+                relocalization_distance_m=float(
+                    self.get_parameter('direction_guard_relocalization_distance_m').value
+                ),
+                max_backward_index_jump=int(
+                    self.get_parameter('direction_guard_max_backward_index_jump').value
+                ),
+            )
+        else:
+            progress_idx = nearest_idx
+        self.progress_idx = progress_idx
+
+        if guard_enabled:
+            target_idx = find_forward_lookahead_index(
+                path=self.path,
+                start_idx=progress_idx,
+                lookahead_dist=float(ld),
+                looped=looped_path,
+                pose_x=float(px),
+                pose_y=float(py),
+                yaw_rad=float(yaw),
+                min_forward_x_m=float(
+                    self.get_parameter('direction_guard_min_forward_x_m').value
+                ),
+            )
+        else:
+            target_idx = find_lookahead_index(
+                path=self.path,
+                start_idx=progress_idx,
+                lookahead_dist=float(ld),
+                looped=looped_path,
+            )
+        if target_idx is None:
+            fallback_speed = min(
+                float(max_speed),
+                max(0.0, float(self.get_parameter('direction_guard_fallback_speed_m_s').value)),
+            )
+            cmd = Twist()
+            cmd.linear.x = float(fallback_speed)
+            cmd.angular.z = 0.0
+            self.cmd_pub.publish(cmd)
+            return
+
         target = self.path[target_idx]
 
         # Transform to vehicle frame
-        dx = target[0] - px
-        dy = target[1] - py
-        local_x = dx * math.cos(-yaw) - dy * math.sin(-yaw)
-        local_y = dx * math.sin(-yaw) + dy * math.cos(-yaw)
+        local_x, local_y = to_vehicle_frame(
+            target_x=float(target[0]),
+            target_y=float(target[1]),
+            pose_x=float(px),
+            pose_y=float(py),
+            yaw_rad=float(yaw),
+        )
 
         dist_sq = local_x ** 2 + local_y ** 2
         if dist_sq < 0.001:

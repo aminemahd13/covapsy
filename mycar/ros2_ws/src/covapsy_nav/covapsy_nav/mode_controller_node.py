@@ -20,6 +20,7 @@ Subscribes:
   /set_mode         (String) - optional external mode switch (disabled by default)
   /opponent_confidence (Float32) - tactical context confidence
   /opponent_count   (Float32)- tactical context count
+  /wrong_direction_confidence (Float32) - optional confidence supplement
 
 Publishes:
   command_topic (Twist) - final command to bridge backend
@@ -86,6 +87,9 @@ class ModeControllerNode(Node):
         self.declare_parameter('track_learned_handoff_confirm_sec', 0.50)
         self.declare_parameter('learning_speed_cap', 0.8)
         self.declare_parameter('wrong_direction_trigger_distance_m', 1.20)
+        self.declare_parameter('wrong_direction_conf_enter', 0.55)
+        self.declare_parameter('wrong_direction_conf_exit', 0.35)
+        self.declare_parameter('wrong_direction_confirm_ticks', 6)
         # ESC arming phase durations — set to 0.0 in simulation to skip arming sequence
         self.declare_parameter('phase0_duration', 0.20)
         self.declare_parameter('phase1_duration', 0.10)
@@ -114,6 +118,7 @@ class ModeControllerNode(Node):
         self.create_subscription(Bool, '/track_learned', self.track_learned_cb, 10)
         self.create_subscription(Bool, '/depth_obstacle', self.depth_obstacle_cb, 10)
         self.create_subscription(Bool, '/wrong_direction', self.wrong_direction_cb, 10)
+        self.create_subscription(Float32, '/wrong_direction_confidence', self.wrong_direction_conf_cb, 10)
         self.create_subscription(Imu, '/imu/data', self.imu_cb, 20)
 
         # Publishers
@@ -167,6 +172,9 @@ class ModeControllerNode(Node):
 
         # U-turn (wrong-direction recovery)
         self.wrong_direction = False
+        self.wrong_direction_confidence = 0.0
+        self.wrong_direction_conf_ticks = 0
+        self.wrong_direction_conf_active = False
         self.wrong_dir_counter = 0
         self.is_uturn = False
         self.uturn_phase = 0        # 0=not active, 1=brake, 2=reverse, 3=forward
@@ -244,7 +252,8 @@ class ModeControllerNode(Node):
             dy = y - self._last_odom_xy[1]
             ds = math.hypot(dx, dy)
             if math.isfinite(ds) and ds < 2.0:
-                if self.wrong_direction:
+                wrong_signal = self._wrong_direction_signal_for_distance()
+                if wrong_signal:
                     self.wrong_dir_distance_m += ds
                 else:
                     self.wrong_dir_distance_m = max(0.0, self.wrong_dir_distance_m - ds * 1.5)
@@ -275,6 +284,9 @@ class ModeControllerNode(Node):
 
     def wrong_direction_cb(self, msg: Bool):
         self.wrong_direction = bool(msg.data)
+
+    def wrong_direction_conf_cb(self, msg: Float32):
+        self.wrong_direction_confidence = max(0.0, min(1.0, float(msg.data)))
 
     def imu_cb(self, msg: Imu):
         self.imu_yaw_rate = float(msg.angular_velocity.z)
@@ -439,8 +451,10 @@ class ModeControllerNode(Node):
                 self.stopped_since = 0.0
                 self.recovery_count = 0
 
+        wrong_direction_active = self._wrong_direction_active()
+
         # Wrong-direction detection → U-turn trigger
-        if self.mode in _ACTIVE_MODES and self.wrong_direction:
+        if self.mode in _ACTIVE_MODES and wrong_direction_active:
             self.wrong_dir_counter += 1
             early_dist = float(self.get_parameter('wrong_direction_trigger_distance_m').value)
             if (
@@ -607,6 +621,34 @@ class ModeControllerNode(Node):
 
         return self._opp_context_active
 
+    def _wrong_direction_signal_for_distance(self) -> bool:
+        conf_exit = float(self.get_parameter('wrong_direction_conf_exit').value)
+        return self.wrong_direction or self.wrong_direction_confidence >= max(0.0, conf_exit)
+
+    def _wrong_direction_active(self) -> bool:
+        conf_enter = float(self.get_parameter('wrong_direction_conf_enter').value)
+        conf_exit = float(self.get_parameter('wrong_direction_conf_exit').value)
+        confirm_ticks = max(1, int(self.get_parameter('wrong_direction_confirm_ticks').value))
+
+        if self.wrong_direction_confidence >= conf_enter:
+            self.wrong_direction_conf_ticks = min(
+                confirm_ticks, self.wrong_direction_conf_ticks + 1
+            )
+        elif self.wrong_direction_confidence <= conf_exit:
+            self.wrong_direction_conf_ticks = max(0, self.wrong_direction_conf_ticks - 1)
+
+        if not self.wrong_direction_conf_active and self.wrong_direction_conf_ticks >= confirm_ticks:
+            self.wrong_direction_conf_active = True
+        elif (
+            self.wrong_direction_conf_active
+            and self.wrong_direction_confidence <= conf_exit
+            and self.wrong_direction_conf_ticks == 0
+        ):
+            self.wrong_direction_conf_active = False
+
+        # Backward compatibility: bool topic still works on its own.
+        return self.wrong_direction or self.wrong_direction_conf_active
+
     def _current_speed(self, now: float, stale_sec: float) -> tuple[bool, float]:
         if (
             self.wheel_speed_received
@@ -634,6 +676,8 @@ class ModeControllerNode(Node):
         self.uturn_phase_start = 0.0
         self.wrong_dir_counter = 0
         self.wrong_dir_distance_m = 0.0
+        self.wrong_direction_conf_ticks = 0
+        self.wrong_direction_conf_active = False
 
 
 def main(args=None):

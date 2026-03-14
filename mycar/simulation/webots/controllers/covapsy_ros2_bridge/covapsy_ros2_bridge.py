@@ -8,7 +8,7 @@ This controller connects one Webots car to the ROS2 stack:
 
 import math
 import time
-from typing import List
+from typing import List, Optional
 
 from controller import GPS
 from controller import InertialUnit
@@ -103,22 +103,23 @@ _CONF_PX = 850
 _LANE_GAIN = math.radians(12.0)
 _SINGLE_BORDER = math.radians(8.0)
 _MAX_STEER = math.radians(18.0)
+_WRONG_WAY_CALIB_MIN_CONF = 0.45
 
 
 def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
-def _compute_camera_steering(rgb_camera):
-    """Compute a steering offset from red/green border detection."""
+def _compute_camera_border_state(rgb_camera):
+    """Return camera border state: (steer, conf, red_cx, green_cx)."""
     if not CAM_AVAILABLE or rgb_camera is None:
-        return 0.0, 0.0
+        return 0.0, 0.0, None, None
 
     image = rgb_camera.getImage()
     w = int(rgb_camera.getWidth())
     h = int(rgb_camera.getHeight())
     if image is None or w <= 0 or h <= 0:
-        return 0.0, 0.0
+        return 0.0, 0.0, None, None
 
     roi_y0 = int(h * _ROI_START)
     cx = 0.5 * w
@@ -160,7 +161,7 @@ def _compute_camera_steering(rgb_camera):
         conf = _clamp(conf + 0.25, 0.0, 1.0)
     else:
         conf = min(conf, 0.55)
-    return steer, conf
+    return steer, conf, red_cx, green_cx
 
 
 class WebotsRosBridge(Node):
@@ -190,6 +191,10 @@ class WebotsRosBridge(Node):
         self.declare_parameter("scan_frame", "laser")
         self.declare_parameter("odom_frame", "odom")
         self.declare_parameter("base_frame", "base_link")
+        self.declare_parameter("wrong_way_enter_conf", 0.55)
+        self.declare_parameter("wrong_way_exit_conf", 0.35)
+        self.declare_parameter("wrong_way_confirm_frames", 6)
+        self.declare_parameter("camera_border_period_sec", 0.08)
 
         self.scan_pub = self.create_publisher(LaserScan, "/scan", 10)
         self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
@@ -197,6 +202,8 @@ class WebotsRosBridge(Node):
         self.rear_pub = self.create_publisher(Bool, "/rear_obstacle", 10)
         self.status_pub = self.create_publisher(String, "/mcu_status", 10)
         self.camera_steer_pub = self.create_publisher(Float32, "/camera_steering_offset", 10)
+        self.wrong_dir_pub = self.create_publisher(Bool, "/wrong_direction", 10)
+        self.wrong_dir_conf_pub = self.create_publisher(Float32, "/wrong_direction_confidence", 10)
         self.imu_pub = self.create_publisher(Imu, "/imu/data", 20)
         self.create_subscription(Twist, "/cmd_vel", self._cmd_cb, 20)
 
@@ -209,6 +216,13 @@ class WebotsRosBridge(Node):
         self._prev_speed = 0.0
         self._prev_yaw = 0.0
         self._prev_time = time.monotonic()
+        self._cam_next_eval_time = 0.0
+        self._cam_steer_cached = 0.0
+        self._cam_conf_cached = 0.0
+        self._cam_expected_red_on_left: Optional[bool] = None
+        self._wrong_way_active = False
+        self._wrong_way_confirm_count = 0
+        self._wrong_way_confidence = 0.0
         self.get_logger().info("Webots ROS2 bridge started (IMU publisher enabled)")
 
     def _effective_max_steering(self) -> float:
@@ -249,6 +263,7 @@ class WebotsRosBridge(Node):
         self.driver.setSteeringAngle(-cmd_steer)
 
     def publish_state(self) -> None:
+        now_mono = time.monotonic()
         now = self.get_clock().now().to_msg()
         scan_frame = str(self.get_parameter("scan_frame").value)
         odom_frame = str(self.get_parameter("odom_frame").value)
@@ -305,17 +320,26 @@ class WebotsRosBridge(Node):
         odom.twist.twist.angular.z = (speed_ms / wheelbase) * math.tan(self.steering_cmd)
         self.odom_pub.publish(odom)
 
-        if (time.monotonic() - self.last_status_time) > 1.0:
+        if (now_mono - self.last_status_time) > 1.0:
             status = String()
             status.data = "backend=webots_ros2;ok=1"
             self.status_pub.publish(status)
-            self.last_status_time = time.monotonic()
+            self.last_status_time = now_mono
 
-        # Camera steering offset (same algorithm as standalone controller)
-        steer_offset, _ = _compute_camera_steering(self.rgb_camera)
+        # Camera steering and wrong-way detection, decimated to reduce Webots load.
+        self._update_camera_direction_state(now_mono)
+
+        steer_offset = self._cam_steer_cached
         cam_msg = Float32()
         cam_msg.data = steer_offset
         self.camera_steer_pub.publish(cam_msg)
+
+        wrong_msg = Bool()
+        wrong_msg.data = self._wrong_way_active
+        self.wrong_dir_pub.publish(wrong_msg)
+        wrong_conf_msg = Float32()
+        wrong_conf_msg.data = float(self._wrong_way_confidence)
+        self.wrong_dir_conf_pub.publish(wrong_conf_msg)
 
         # IMU data derived from Webots InertialUnit + speed delta
         cur_time = time.monotonic()
@@ -347,6 +371,52 @@ class WebotsRosBridge(Node):
         self._prev_speed = speed_ms
         self._prev_yaw = yaw
         self._prev_time = cur_time
+
+    def _update_camera_direction_state(self, now_mono: float) -> None:
+        period = max(0.02, float(self.get_parameter("camera_border_period_sec").value))
+        if now_mono < self._cam_next_eval_time:
+            return
+        self._cam_next_eval_time = now_mono + period
+
+        steer, conf, red_cx, green_cx = _compute_camera_border_state(self.rgb_camera)
+        self._cam_steer_cached = float(steer)
+        self._cam_conf_cached = float(conf)
+
+        both_seen = red_cx is not None and green_cx is not None
+        if (
+            self._cam_expected_red_on_left is None
+            and both_seen
+            and conf >= _WRONG_WAY_CALIB_MIN_CONF
+        ):
+            self._cam_expected_red_on_left = bool(red_cx < green_cx)
+            self.get_logger().info(
+                "Camera direction calibration locked: expected red_on_left=%s"
+                % ("true" if self._cam_expected_red_on_left else "false")
+            )
+
+        wrong_conf = 0.0
+        if self._cam_expected_red_on_left is not None and both_seen:
+            red_on_left = bool(red_cx < green_cx)
+            if red_on_left != self._cam_expected_red_on_left:
+                wrong_conf = float(conf)
+        self._wrong_way_confidence = _clamp(wrong_conf, 0.0, 1.0)
+
+        enter_conf = float(self.get_parameter("wrong_way_enter_conf").value)
+        exit_conf = float(self.get_parameter("wrong_way_exit_conf").value)
+        confirm_frames = max(1, int(self.get_parameter("wrong_way_confirm_frames").value))
+        if self._wrong_way_confidence >= enter_conf:
+            self._wrong_way_confirm_count = min(confirm_frames, self._wrong_way_confirm_count + 1)
+        elif self._wrong_way_confidence <= exit_conf:
+            self._wrong_way_confirm_count = max(0, self._wrong_way_confirm_count - 1)
+
+        if not self._wrong_way_active and self._wrong_way_confirm_count >= confirm_frames:
+            self._wrong_way_active = True
+        elif (
+            self._wrong_way_active
+            and self._wrong_way_confidence <= exit_conf
+            and self._wrong_way_confirm_count == 0
+        ):
+            self._wrong_way_active = False
 
 
 def main() -> None:

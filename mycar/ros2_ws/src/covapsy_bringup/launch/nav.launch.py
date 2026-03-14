@@ -38,6 +38,9 @@ def generate_launch_description():
             DeclareLaunchArgument("stuck_actual_speed_max", default_value="0.06"),
             DeclareLaunchArgument("stuck_sensor_stale_sec", default_value="0.40"),
             DeclareLaunchArgument("wrong_direction_trigger_distance_m", default_value="1.20"),
+            DeclareLaunchArgument("wrong_direction_conf_enter", default_value="0.55"),
+            DeclareLaunchArgument("wrong_direction_conf_exit", default_value="0.35"),
+            DeclareLaunchArgument("wrong_direction_confirm_ticks", default_value="6"),
             DeclareLaunchArgument("track_learned_handoff_confirm_sec", default_value="0.50"),
             DeclareLaunchArgument("tactical_context_mode", default_value="manual"),
             DeclareLaunchArgument("tactical_opp_conf_threshold", default_value="0.45"),
@@ -75,6 +78,11 @@ def generate_launch_description():
             DeclareLaunchArgument("track_learning_smoothing_window", default_value="7"),
             DeclareLaunchArgument("track_learning_apex_iterations", default_value="5"),
             DeclareLaunchArgument("track_learning_auto_publish", default_value="true"),
+            DeclareLaunchArgument("pursuit_direction_guard_enabled", default_value="true"),
+            DeclareLaunchArgument("pursuit_direction_guard_min_forward_x_m", default_value="0.05"),
+            DeclareLaunchArgument("pursuit_direction_guard_max_backward_index_jump", default_value="8"),
+            DeclareLaunchArgument("pursuit_direction_guard_relocalization_distance_m", default_value="0.90"),
+            DeclareLaunchArgument("pursuit_direction_guard_fallback_speed_m_s", default_value="0.20"),
             DeclareLaunchArgument("tactical_near_weight_base", default_value="0.35"),
             DeclareLaunchArgument("tactical_near_weight_min", default_value="0.20"),
             DeclareLaunchArgument("tactical_near_weight_max", default_value="0.90"),
@@ -197,6 +205,19 @@ def generate_launch_description():
                         "steering_slew_rate": 0.06,
                         "scan_front_half_angle_deg": 20.0,
                         "ttc_target_sec": 1.2,
+                        "direction_guard_enabled": LaunchConfiguration("pursuit_direction_guard_enabled"),
+                        "direction_guard_min_forward_x_m": LaunchConfiguration(
+                            "pursuit_direction_guard_min_forward_x_m"
+                        ),
+                        "direction_guard_max_backward_index_jump": LaunchConfiguration(
+                            "pursuit_direction_guard_max_backward_index_jump"
+                        ),
+                        "direction_guard_relocalization_distance_m": LaunchConfiguration(
+                            "pursuit_direction_guard_relocalization_distance_m"
+                        ),
+                        "direction_guard_fallback_speed_m_s": LaunchConfiguration(
+                            "pursuit_direction_guard_fallback_speed_m_s"
+                        ),
                     }
                 ],
                 output="screen",
@@ -318,6 +339,11 @@ def generate_launch_description():
                         "halt_on_scan_stale": LaunchConfiguration("halt_on_scan_stale"),
                         "wrong_direction_trigger_distance_m": LaunchConfiguration(
                             "wrong_direction_trigger_distance_m"
+                        ),
+                        "wrong_direction_conf_enter": LaunchConfiguration("wrong_direction_conf_enter"),
+                        "wrong_direction_conf_exit": LaunchConfiguration("wrong_direction_conf_exit"),
+                        "wrong_direction_confirm_ticks": LaunchConfiguration(
+                            "wrong_direction_confirm_ticks"
                         ),
                         "track_learned_handoff_confirm_sec": LaunchConfiguration(
                             "track_learned_handoff_confirm_sec"

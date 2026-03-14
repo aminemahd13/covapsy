@@ -5,12 +5,12 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2022b/project
 EXTERNPROTO "../protos/TT02_2025a.proto"
 
 WorldInfo {
-  basicTimeStep 16
+  basicTimeStep 20
   contactProperties [
     ContactProperties {
       material1 "default"
       material2 "default"
-      maxContactJoints 24
+      maxContactJoints 16
     }
   ]
 }
@@ -2249,4 +2249,3 @@ TT02_2025a {
   controller "covapsy_ros2_bridge"
   color 0.142412 0.743923 0.241001
 }
-
