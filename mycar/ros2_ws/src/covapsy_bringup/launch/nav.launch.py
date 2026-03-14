@@ -42,11 +42,6 @@ def generate_launch_description():
             DeclareLaunchArgument("wrong_direction_conf_enter", default_value="0.55"),
             DeclareLaunchArgument("wrong_direction_conf_exit", default_value="0.35"),
             DeclareLaunchArgument("wrong_direction_confirm_ticks", default_value="6"),
-            DeclareLaunchArgument("wrong_direction_correction_trigger_ticks", default_value="8"),
-            DeclareLaunchArgument("wrong_direction_correction_distance_m", default_value="0.45"),
-            DeclareLaunchArgument("wrong_direction_correction_speed_m_s", default_value="0.18"),
-            DeclareLaunchArgument("wrong_direction_correction_steer_rad", default_value="0.22"),
-            DeclareLaunchArgument("wrong_direction_correction_max_sec", default_value="0.70"),
             DeclareLaunchArgument("wrong_direction_uturn_trigger_ticks", default_value="15"),
             DeclareLaunchArgument("track_learned_handoff_confirm_sec", default_value="0.50"),
             DeclareLaunchArgument("tactical_context_mode", default_value="manual"),
@@ -62,14 +57,6 @@ def generate_launch_description():
             DeclareLaunchArgument("reactive_far_weight_min", default_value="0.10"),
             DeclareLaunchArgument("reactive_far_weight_max", default_value="0.55"),
             DeclareLaunchArgument("reactive_fusion_clearance_ref_m", default_value="1.8"),
-            DeclareLaunchArgument("reactive_steering_low_pass_alpha", default_value="0.70"),
-            DeclareLaunchArgument("reactive_steering_low_pass_alpha_min", default_value="0.62"),
-            DeclareLaunchArgument("reactive_steering_low_pass_alpha_max", default_value="0.90"),
-            DeclareLaunchArgument("reactive_steering_low_pass_speed_ref_m_s", default_value="1.8"),
-            DeclareLaunchArgument("reactive_steering_jerk_limit_rad", default_value="0.035"),
-            DeclareLaunchArgument("reactive_steering_sign_hysteresis_rad", default_value="0.025"),
-            DeclareLaunchArgument("reactive_steering_center_hold_speed_m_s", default_value="0.80"),
-            DeclareLaunchArgument("reactive_steering_slew_speed_scale", default_value="0.45"),
             DeclareLaunchArgument("reactive_speed_slew_up", default_value="0.25"),
             DeclareLaunchArgument("reactive_speed_slew_down", default_value="0.35"),
             DeclareLaunchArgument("reactive_use_odom_speed_fallback", default_value="true"),
@@ -77,9 +64,6 @@ def generate_launch_description():
             DeclareLaunchArgument("reactive_odom_speed_timeout_sec", default_value="0.45"),
             DeclareLaunchArgument("reactive_depth_timeout_sec", default_value="0.35"),
             DeclareLaunchArgument("reactive_camera_timeout_sec", default_value="0.30"),
-            DeclareLaunchArgument("reactive_camera_offset_conf_ref_rad", default_value="0.20"),
-            DeclareLaunchArgument("reactive_camera_offset_jitter_ref_rad", default_value="0.08"),
-            DeclareLaunchArgument("reactive_camera_offset_min_confidence", default_value="0.12"),
             DeclareLaunchArgument("drive_input_stale_sec", default_value="0.45"),
             DeclareLaunchArgument("stale_speed_cap", default_value="0.20"),
             DeclareLaunchArgument("halt_on_scan_stale", default_value="true"),
@@ -153,30 +137,6 @@ def generate_launch_description():
                         "fusion_clearance_ref_m": LaunchConfiguration(
                             "reactive_fusion_clearance_ref_m"
                         ),
-                        "steering_low_pass_alpha": LaunchConfiguration(
-                            "reactive_steering_low_pass_alpha"
-                        ),
-                        "steering_low_pass_alpha_min": LaunchConfiguration(
-                            "reactive_steering_low_pass_alpha_min"
-                        ),
-                        "steering_low_pass_alpha_max": LaunchConfiguration(
-                            "reactive_steering_low_pass_alpha_max"
-                        ),
-                        "steering_low_pass_speed_ref_m_s": LaunchConfiguration(
-                            "reactive_steering_low_pass_speed_ref_m_s"
-                        ),
-                        "steering_jerk_limit_rad": LaunchConfiguration(
-                            "reactive_steering_jerk_limit_rad"
-                        ),
-                        "steering_sign_hysteresis_rad": LaunchConfiguration(
-                            "reactive_steering_sign_hysteresis_rad"
-                        ),
-                        "steering_center_hold_speed_m_s": LaunchConfiguration(
-                            "reactive_steering_center_hold_speed_m_s"
-                        ),
-                        "steering_slew_speed_scale": LaunchConfiguration(
-                            "reactive_steering_slew_speed_scale"
-                        ),
                         "speed_slew_up": LaunchConfiguration("reactive_speed_slew_up"),
                         "speed_slew_down": LaunchConfiguration("reactive_speed_slew_down"),
                         "use_odom_speed_fallback": LaunchConfiguration(
@@ -190,15 +150,6 @@ def generate_launch_description():
                         ),
                         "depth_timeout_sec": LaunchConfiguration("reactive_depth_timeout_sec"),
                         "camera_timeout_sec": LaunchConfiguration("reactive_camera_timeout_sec"),
-                        "camera_offset_conf_ref_rad": LaunchConfiguration(
-                            "reactive_camera_offset_conf_ref_rad"
-                        ),
-                        "camera_offset_jitter_ref_rad": LaunchConfiguration(
-                            "reactive_camera_offset_jitter_ref_rad"
-                        ),
-                        "camera_offset_min_confidence": LaunchConfiguration(
-                            "reactive_camera_offset_min_confidence"
-                        ),
                     }
                 ],
                 output="screen",

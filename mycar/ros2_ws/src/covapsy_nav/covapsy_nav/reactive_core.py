@@ -98,10 +98,7 @@ def compute_reactive_drive(
     imu_yaw_rate: float,
     imu_speed: float,
 ) -> tuple[float, float]:
-    """Compute (speed, steering) using corridor-following reactive control.
-
-    Uses the C library if available, otherwise falls back to numpy.
-    """
+    """Compute (speed, steering) using corridor-following reactive control."""
     if _C_AVAILABLE:
         return _compute_c(
             ranges, angles, car_width, max_speed, min_speed, max_range,
@@ -168,13 +165,13 @@ def _compute_c(
 # Constants matching the C implementation
 _K_CENTER = 0.80
 _K_HEADING = 0.50
-_K_REPULSION = 0.90
+_K_REPULSION = 1.20
 _K_IMU_DAMP = 0.10
-_REPULSION_DIST_FACTOR = 1.5
+_REPULSION_DIST_FACTOR = 2.5
 _CLEARANCE_REF_M = 1.80
 _CURV_SPEED_PEN = 0.35
 _STEER_SPEED_PEN = 0.25
-_EMERGENCY_STOP_M = 0.15
+_EMERGENCY_STOP_M = 0.18
 _CREEP_CLEAR_M = 0.35
 _CLOSE_WALL_FACTOR = 2.0
 _W_CENTER_CLOSE = 0.75
@@ -185,8 +182,20 @@ _FWD_CONE_RAD = math.radians(15.0)
 _STEER_CONE_RAD = math.radians(18.0)
 _PAIR_HALF_WIDTH = math.radians(6.0)
 _N_PAIRS = 9
-_HEADING_SCALE = 0.70
-_MIN_USEFUL_RANGE = 0.30
+_HEADING_SCALE = 0.55
+_MIN_USEFUL_RANGE = 0.50
+
+# Sector-based gap finding
+_N_SECTORS = 36
+_SECTOR_SMOOTH_HW = 2
+
+# Wall-ahead detection
+_WALL_AHEAD_CONE_RAD = 0.35
+_WALL_AHEAD_THRESH_M = 1.5
+_WALL_AHEAD_CRIT_M = 0.45
+_ESCAPE_GAIN = 1.8
+_ESCAPE_FWD_BIAS = 0.3
+_WALL_SPEED_PENALTY = 0.5
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -216,6 +225,51 @@ def _compute_python(
 
     if len(r) < 10:
         return 0.0, 0.0
+
+    # ── Sector depth map ──
+    sector_width = (fov_half * 2.0) / _N_SECTORS
+    sector_indices = ((a + fov_half) / sector_width).astype(int)
+    sector_indices = np.clip(sector_indices, 0, _N_SECTORS - 1)
+
+    sector_sum = np.zeros(_N_SECTORS)
+    sector_count = np.zeros(_N_SECTORS, dtype=int)
+    np.add.at(sector_sum, sector_indices, r)
+    np.add.at(sector_count, sector_indices, 1)
+
+    # Smoothed sector averages
+    sector_avg = np.zeros(_N_SECTORS)
+    for s in range(_N_SECTORS):
+        lo = max(0, s - _SECTOR_SMOOTH_HW)
+        hi = min(_N_SECTORS - 1, s + _SECTOR_SMOOTH_HW)
+        total = float(np.sum(sector_sum[lo:hi + 1]))
+        cnt = int(np.sum(sector_count[lo:hi + 1]))
+        sector_avg[s] = total / cnt if cnt > 0 else 0.0
+
+    # ── Forward wall detection ──
+    fwd_mask = np.abs(a) <= _WALL_AHEAD_CONE_RAD
+    fwd_min = float(np.min(r[fwd_mask])) if np.any(fwd_mask) else max_range
+
+    fwd_min_fused = fwd_min
+    if math.isfinite(depth_front) and depth_front > 0:
+        fwd_min_fused = min(fwd_min_fused, depth_front)
+
+    # Wall-ahead urgency (sqrt curve for faster ramp-up)
+    wall_urgency = 0.0
+    if fwd_min_fused < _WALL_AHEAD_THRESH_M:
+        raw = ((_WALL_AHEAD_THRESH_M - fwd_min_fused)
+               / (_WALL_AHEAD_THRESH_M - _WALL_AHEAD_CRIT_M))
+        raw = _clamp(raw, 0.0, 1.0)
+        wall_urgency = math.sqrt(raw)
+
+    # ── Escape direction: deepest sector with forward bias ──
+    best_escape_score = -1.0
+    escape_angle = 0.0
+    for s in range(_N_SECTORS):
+        direction = -fov_half + (s + 0.5) * sector_width
+        score = sector_avg[s] * (1.0 + _ESCAPE_FWD_BIAS * math.cos(direction))
+        if score > best_escape_score:
+            best_escape_score = score
+            escape_angle = direction
 
     # ── Corridor model ──
     max_pair_angle = fov_half * 0.85
@@ -256,13 +310,19 @@ def _compute_python(
         best_heading = 0.0
     steer_heading = _K_HEADING * best_heading
 
-    # Blend
+    # Blend (normal driving)
     close_to_wall = min_wall < car_width * _CLOSE_WALL_FACTOR
     if close_to_wall:
         w_c, w_h = _W_CENTER_CLOSE, _W_HEADING_CLOSE
     else:
         w_c, w_h = _W_CENTER_OPEN, _W_HEADING_OPEN
-    steering = (w_c * steer_center + w_h * steer_heading) / (w_c + w_h)
+    steering_normal = (w_c * steer_center + w_h * steer_heading) / (w_c + w_h)
+
+    # Wall-ahead escape override
+    steer_escape = _clamp(
+        escape_angle * _ESCAPE_GAIN,
+        -max_steering, max_steering)
+    steering = (1.0 - wall_urgency) * steering_normal + wall_urgency * steer_escape
 
     # Obstacle repulsion
     danger_dist = car_width * _REPULSION_DIST_FACTOR
@@ -306,8 +366,9 @@ def _compute_python(
     clearance_factor = _clamp(effective_clear / _CLEARANCE_REF_M, 0.0, 1.0)
     curvature_factor = 1.0 - _CURV_SPEED_PEN * curvature
     steer_factor = 1.0 - _STEER_SPEED_PEN * abs(steering) / max(max_steering, 0.01)
+    wall_speed_factor = 1.0 - _WALL_SPEED_PENALTY * wall_urgency
 
-    speed = max_speed * clearance_factor * curvature_factor * steer_factor
+    speed = max_speed * clearance_factor * curvature_factor * steer_factor * wall_speed_factor
     speed = _clamp(speed, 0.0, max_speed)
 
     # TTC
