@@ -23,6 +23,7 @@ class ReactiveDriverNode(Node):
         self.declare_parameter('max_speed_mps', 0.9)
         self.declare_parameter('ttc_limit_s', 1.0)
         self.declare_parameter('target_center_bias', 0.25)
+        self.declare_parameter('corridor_centering_gain', 0.15)
 
         self.car_half_width_m = float(self.get_parameter('car_half_width_m').value)
         self.safety_margin_m = float(self.get_parameter('safety_margin_m').value)
@@ -34,6 +35,7 @@ class ReactiveDriverNode(Node):
         self.max_speed = float(self.get_parameter('max_speed_mps').value)
         self.ttc_limit_s = float(self.get_parameter('ttc_limit_s').value)
         self.center_bias = float(self.get_parameter('target_center_bias').value)
+        self.corridor_gain = float(self.get_parameter('corridor_centering_gain').value)
 
         self.last_steer = 0.0
         self.last_time = self.get_clock().now()
@@ -97,11 +99,14 @@ class ReactiveDriverNode(Node):
                 start = None
         return gaps
 
-    def _select_target(self, ranges: List[float], gaps: List[Tuple[int, int]], msg: LaserScan) -> int:
+    def _select_target(self, ranges: List[float], gaps: List[Tuple[int, int]], msg: LaserScan) -> Tuple[int, int, int]:
+        """Select target index and return (target_idx, gap_start, gap_end)."""
+        n = len(ranges)
         if not gaps:
-            return len(ranges) // 2
+            mid = n // 2
+            return mid, mid, mid
         scored = []
-        center = len(ranges) // 2
+        center = n // 2
         for s, e in gaps:
             width = e - s + 1
             mean_r = sum(ranges[s:e + 1]) / float(width)
@@ -110,7 +115,20 @@ class ReactiveDriverNode(Node):
             score = mean_r + 0.35 * width * msg.angle_increment + self.center_bias * center_bonus
             scored.append((score, s, e))
         _, s, e = max(scored, key=lambda x: x[0])
-        return (s + e) // 2
+        # Aim for the deepest point in the selected gap instead of gap center.
+        # Deepest point maximises clearance and is more stable than the geometric midpoint.
+        best_idx = s
+        for i in range(s + 1, e + 1):
+            if ranges[i] > ranges[best_idx]:
+                best_idx = i
+        return best_idx, s, e
+
+    def _sector_avg_positive(self, ranges: List[float], start: int, end: int) -> float:
+        """Average of positive values in a range slice."""
+        vals = [r for r in ranges[start:end] if r > 0.05]
+        if not vals:
+            return 0.1
+        return sum(vals) / len(vals)
 
     def _steer_from_target(self, target_idx: int, msg: LaserScan) -> float:
         angle = msg.angle_min + target_idx * msg.angle_increment
@@ -154,19 +172,33 @@ class ReactiveDriverNode(Node):
 
         raw_ranges = [max(0.0, min(msg.range_max, float(r))) for r in msg.ranges]
         ranges = list(raw_ranges)
+        n = len(ranges)
+        mid = n // 2
         idx_min, idx_max = self._forward_indices(msg)
 
         self._apply_safety_bubble(ranges, idx_min, idx_max)
         self._apply_disparity_extension(ranges, msg.angle_increment, idx_min, idx_max)
         gaps = self._extract_gaps(ranges, idx_min, idx_max)
-        target_idx = self._select_target(ranges, gaps, msg)
+        target_idx, gap_s, gap_e = self._select_target(ranges, gaps, msg)
+
+        # Corridor centering: mild bias toward the side with more wall clearance.
+        # Positive balance = left more open -> shift target left (increase index).
+        if self.corridor_gain > 0.0:
+            sixth = max(1, n // 6)
+            left_avg = self._sector_avg_positive(
+                raw_ranges, mid + sixth // 2, min(n, mid + sixth + sixth // 2))
+            right_avg = self._sector_avg_positive(
+                raw_ranges, max(0, mid - sixth - sixth // 2), max(1, mid - sixth // 2))
+            balance = (left_avg - right_avg) / max(0.3, left_avg + right_avg)
+            shift = int(balance * self.corridor_gain * (idx_max - idx_min))
+            target_idx = max(idx_min, min(idx_max, target_idx + shift))
 
         steer = self._steer_from_target(target_idx, msg)
-        front_idx = len(raw_ranges) // 2
-        center_clear = self._sector_min_positive(raw_ranges, front_idx, max(1, len(raw_ranges) // 60))
-        target_clear = self._sector_min_positive(raw_ranges, target_idx, max(1, len(raw_ranges) // 90))
+        center_clear = self._sector_min_positive(raw_ranges, mid, max(1, n // 60))
+        target_clear = self._sector_min_positive(raw_ranges, target_idx, max(1, n // 90))
 
-        # When turning, allow the free-space in the steering direction to dominate speed gating.
+        # When turning, allow clearance in the steering direction to gate speed
+        # so the car doesn't slow down unnecessarily entering a turn.
         if abs(steer) > 0.12:
             front_clear = max(center_clear, 0.9 * target_clear)
         else:
@@ -181,13 +213,19 @@ class ReactiveDriverNode(Node):
         cmd.speed_mps = speed
         self.cmd_pub.publish(cmd)
 
+        # Debug: [front_clear, target_angle, steer, speed, gap_count, gap_start_angle, gap_end_angle]
+        target_angle = msg.angle_min + target_idx * msg.angle_increment
+        gap_s_angle = msg.angle_min + gap_s * msg.angle_increment
+        gap_e_angle = msg.angle_min + gap_e * msg.angle_increment
         dbg = Float32MultiArray()
         dbg.data = [
             float(front_clear),
-            float(target_idx),
+            float(target_angle),
             float(steer),
             float(speed),
             float(len(gaps)),
+            float(gap_s_angle),
+            float(gap_e_angle),
         ]
         self.debug_pub.publish(dbg)
 

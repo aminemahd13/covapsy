@@ -9,6 +9,8 @@ reactive_driver_node:
     min_speed_mps: 0.12
     max_speed_mps: 0.5
     ttc_limit_s: 1.2
+    steer_slew_rad_s: 2.0
+    corridor_centering_gain: 0.12
 
 mode_controller_node:
   ros__parameters:
@@ -16,11 +18,16 @@ mode_controller_node:
     learn_speed_cap_mps: 0.45
     race_speed_cap_mps: 0.7
     wrong_way_recovery_conf: 0.8
+    stuck_cycles: 18
+    odom_progress_window_s: 1.2
+    odom_min_displacement_m: 0.015
 
 track_learner_node:
   ros__parameters:
     min_samples: 320
     min_quality: 0.78
+    speed_profile_max_mps: 0.4
+    speed_profile_curvature_gain: 0.7
 
 stm32_bridge_node:
   ros__parameters:

@@ -8,6 +8,7 @@ reactive_driver_node:
   ros__parameters:
     min_speed_mps: 0.12
     max_speed_mps: 0.55
+    corridor_centering_gain: 0.10
 
 pure_pursuit_node:
   ros__parameters:
@@ -22,10 +23,15 @@ mode_controller_node:
     race_speed_cap_mps: 0.85
     safety_steer_veto_clearance_m: 0.28
     front_blocked_m: 0.2
+    stuck_cycles: 18
+    odom_progress_window_s: 1.2
+    odom_min_displacement_m: 0.015
 
 track_learner_node:
   ros__parameters:
     min_quality: 0.8
+    speed_profile_max_mps: 0.5
+    speed_profile_curvature_gain: 0.6
 
 stm32_bridge_node:
   ros__parameters:

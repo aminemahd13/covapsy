@@ -19,12 +19,20 @@ class TrackLearnerNode(Node):
         self.declare_parameter('min_quality', 0.72)
         self.declare_parameter('lane_half_width_assumed_m', 0.45)
         self.declare_parameter('max_curvature', 2.5)
+        self.declare_parameter('speed_profile_max_mps', 0.6)
+        self.declare_parameter('speed_profile_curvature_gain', 0.7)
+        self.declare_parameter('min_path_length_m', 2.0)
+        self.declare_parameter('max_path_length_m', 50.0)
 
         self.sample_distance = float(self.get_parameter('sample_distance_m').value)
         self.min_samples = int(self.get_parameter('min_samples').value)
         self.min_quality = float(self.get_parameter('min_quality').value)
         self.lane_half_width = float(self.get_parameter('lane_half_width_assumed_m').value)
         self.max_curvature = float(self.get_parameter('max_curvature').value)
+        self.speed_max = float(self.get_parameter('speed_profile_max_mps').value)
+        self.speed_curv_gain = float(self.get_parameter('speed_profile_curvature_gain').value)
+        self.min_path_len = float(self.get_parameter('min_path_length_m').value)
+        self.max_path_len = float(self.get_parameter('max_path_length_m').value)
 
         self.last_scan = None
         self.last_dir = DirectionState.DIR_UNKNOWN
@@ -49,12 +57,26 @@ class TrackLearnerNode(Node):
         self.last_dir = msg.state
 
     def _front_left_right_ranges(self, scan: LaserScan):
+        """Estimate left and right wall distances using sector averages
+        centered at +/-90 degrees.  Much more robust than single-ray."""
         n = len(scan.ranges)
         mid = n // 2
-        left_idx = min(n - 1, mid + n // 4)
-        right_idx = max(0, mid - n // 4)
-        left = max(0.05, min(scan.range_max, scan.ranges[left_idx]))
-        right = max(0.05, min(scan.range_max, scan.ranges[right_idx]))
+        sector_half = max(1, n // 24)  # ~7.5 deg half-width
+
+        # Left side: sector around +90 deg (index mid + n//4)
+        left_center = min(n - 1, mid + n // 4)
+        left_start = max(0, left_center - sector_half)
+        left_end = min(n, left_center + sector_half + 1)
+        left_vals = [v for v in scan.ranges[left_start:left_end] if v > 0.05]
+        left = sum(left_vals) / max(1, len(left_vals)) if left_vals else scan.range_max
+
+        # Right side: sector around -90 deg (index mid - n//4)
+        right_center = max(0, mid - n // 4)
+        right_start = max(0, right_center - sector_half)
+        right_end = min(n, right_center + sector_half + 1)
+        right_vals = [v for v in scan.ranges[right_start:right_end] if v > 0.05]
+        right = sum(right_vals) / max(1, len(right_vals)) if right_vals else scan.range_max
+
         return left, right
 
     def odom_cb(self, msg: Odometry) -> None:
@@ -73,13 +95,27 @@ class TrackLearnerNode(Node):
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
         left_d, right_d = self._front_left_right_ranges(self.last_scan)
-        lateral_offset = 0.5 * (right_d - left_d)
+        # Lateral offset: positive when left wall is further -> midpoint is to the left.
+        # Transform direction (-sin, cos) is the left-perpendicular, so positive offset
+        # correctly shifts the midpoint toward the more-open left side.
+        lateral_offset = 0.5 * (left_d - right_d)
         lateral_offset = max(-self.lane_half_width, min(self.lane_half_width, lateral_offset))
 
         mx = x + lateral_offset * -math.sin(yaw)
         my = y + lateral_offset * math.cos(yaw)
 
         if self.last_dir == DirectionState.DIR_WRONG:
+            return
+
+        # Deduplicate: skip if too close to any recent sample (handles revisits after recovery).
+        check_range = min(50, len(self.samples))
+        too_close = False
+        for sx, sy in self.samples[-check_range:]:
+            if math.hypot(mx - sx, my - sy) < self.sample_distance * 0.5:
+                too_close = True
+                break
+        if too_close:
+            self.last_pos = (x, y)
             return
 
         self.samples.append((mx, my))
@@ -120,29 +156,60 @@ class TrackLearnerNode(Node):
             sm.append((sum(xs) / len(xs), sum(ys) / len(ys)))
         return sm
 
+    def _curvature_at(self, pts: List[Tuple[float, float]], i: int) -> float:
+        """Curvature at point i via Menger curvature (3-point circle)."""
+        n = len(pts)
+        x0, y0 = pts[(i - 1) % n]
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        a = math.hypot(x1 - x0, y1 - y0)
+        b = math.hypot(x2 - x1, y2 - y1)
+        c = math.hypot(x2 - x0, y2 - y0)
+        if a < 1e-4 or b < 1e-4:
+            return 0.0
+        s = (a + b + c) / 2.0
+        area_sq = max(0.0, s * (s - a) * (s - b) * (s - c))
+        if area_sq < 1e-12:
+            return 0.0
+        area = math.sqrt(area_sq)
+        return 4.0 * area / max(1e-6, a * b * c)
+
     def _curvature_stats(self, pts: List[Tuple[float, float]]) -> float:
         if len(pts) < 3:
             return 999.0
         curv = []
-        for i in range(1, len(pts) - 1):
-            x0, y0 = pts[i - 1]
-            x1, y1 = pts[i]
-            x2, y2 = pts[i + 1]
-            a = math.hypot(x1 - x0, y1 - y0)
-            b = math.hypot(x2 - x1, y2 - y1)
-            c = math.hypot(x2 - x0, y2 - y0)
-            if a < 1e-4 or b < 1e-4:
-                continue
-            s = (a + b + c) / 2.0
-            area_sq = max(0.0, s * (s - a) * (s - b) * (s - c))
-            if area_sq < 1e-12:
-                continue
-            area = math.sqrt(area_sq)
-            kappa = 4.0 * area / max(1e-6, a * b * c)
-            curv.append(abs(kappa))
+        for i in range(len(pts)):
+            k = self._curvature_at(pts, i)
+            if k > 0.0:
+                curv.append(k)
         if not curv:
             return 999.0
         return sum(curv) / len(curv)
+
+    def _path_length(self, pts: List[Tuple[float, float]]) -> float:
+        total = 0.0
+        for i in range(1, len(pts)):
+            total += math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+        return total
+
+    def _compute_speed_profile(self, pts: List[Tuple[float, float]]) -> List[float]:
+        """Conservative speed profile: slow in tight curves, faster on straights."""
+        if len(pts) < 3:
+            return [self.speed_max] * len(pts)
+        speeds = []
+        for i in range(len(pts)):
+            kappa = self._curvature_at(pts, i)
+            penalty = min(1.0, kappa / max(1e-3, self.max_curvature))
+            speed = self.speed_max * max(0.3, 1.0 - self.speed_curv_gain * penalty)
+            speeds.append(speed)
+        # Smooth the speed profile with a moving average.
+        if len(speeds) > 5:
+            smoothed = []
+            for i in range(len(speeds)):
+                window = [speeds[(i + j) % len(speeds)] for j in range(-2, 3)]
+                smoothed.append(sum(window) / len(window))
+            speeds = smoothed
+        return speeds
 
     def publish_outputs(self) -> None:
         learned = Bool()
@@ -170,13 +237,23 @@ class TrackLearnerNode(Node):
         spacing_mean = sum(spacing) / max(1, len(spacing))
         spacing_std = math.sqrt(sum((v - spacing_mean) ** 2 for v in spacing) / max(1, len(spacing)))
         curv = self._curvature_stats(pts)
+        path_len = self._path_length(pts)
 
         closure_score = max(0.0, 1.0 - closure / 1.0)
         spacing_score = max(0.0, 1.0 - spacing_std / max(0.05, self.sample_distance))
         smoothness = max(0.0, 1.0 - curv / max(1e-3, self.max_curvature))
         lap_consistency = min(1.0, len(self.samples) / float(self.min_samples * 2))
 
-        score = 0.35 * closure_score + 0.25 * spacing_score + 0.25 * smoothness + 0.15 * lap_consistency
+        # Path length sanity: penalise tracks that are too short or too long.
+        if path_len < self.min_path_len:
+            length_score = path_len / max(1e-3, self.min_path_len)
+        elif path_len > self.max_path_len:
+            length_score = max(0.0, 1.0 - (path_len - self.max_path_len) / self.max_path_len)
+        else:
+            length_score = 1.0
+
+        score = (0.30 * closure_score + 0.20 * spacing_score
+                 + 0.25 * smoothness + 0.10 * lap_consistency + 0.15 * length_score)
 
         quality.score = float(score)
         quality.closure_error_m = float(closure)
@@ -186,14 +263,18 @@ class TrackLearnerNode(Node):
         quality.is_valid = bool(score >= self.min_quality)
         quality.reason = 'ok' if quality.is_valid else 'quality_below_threshold'
 
+        # Compute conservative speed profile (stored in position.z for each waypoint).
+        speeds = self._compute_speed_profile(pts)
+
         path = Path()
         path.header.stamp = quality.header.stamp
         path.header.frame_id = 'odom'
-        for x, y in pts:
+        for idx, (px, py) in enumerate(pts):
             ps = PoseStamped()
             ps.header = path.header
-            ps.pose.position.x = float(x)
-            ps.pose.position.y = float(y)
+            ps.pose.position.x = float(px)
+            ps.pose.position.y = float(py)
+            ps.pose.position.z = float(speeds[idx]) if idx < len(speeds) else float(self.speed_max)
             ps.pose.orientation.w = 1.0
             path.poses.append(ps)
 

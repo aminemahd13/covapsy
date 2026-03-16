@@ -5,6 +5,7 @@ import math
 import rclpy
 from covapsy_interfaces.msg import DriveCommand, RaceTelemetry, RecoveryState, TrackQuality
 from covapsy_control.recovery_fsm import RecoveryFSM, RecoveryStage
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, LaserScan
 from std_msgs.msg import Bool, Float32, String
@@ -21,6 +22,8 @@ class ModeControllerNode(Node):
         self.declare_parameter('race_speed_cap_mps', 1.5)
         self.declare_parameter('learn_speed_cap_mps', 0.7)
         self.declare_parameter('safety_steer_veto_clearance_m', 0.3)
+        self.declare_parameter('odom_progress_window_s', 1.0)
+        self.declare_parameter('odom_min_displacement_m', 0.02)
 
         self.mode = str(self.get_parameter('start_mode').value)
         self.wrong_way_recovery_conf = float(self.get_parameter('wrong_way_recovery_conf').value)
@@ -30,6 +33,8 @@ class ModeControllerNode(Node):
         self.race_speed_cap = float(self.get_parameter('race_speed_cap_mps').value)
         self.learn_speed_cap = float(self.get_parameter('learn_speed_cap_mps').value)
         self.safety_veto_clearance = float(self.get_parameter('safety_steer_veto_clearance_m').value)
+        self.odom_window = float(self.get_parameter('odom_progress_window_s').value)
+        self.odom_min_disp = float(self.get_parameter('odom_min_displacement_m').value)
 
         self.cmd_reactive = DriveCommand()
         self.cmd_pursuit = DriveCommand()
@@ -43,6 +48,7 @@ class ModeControllerNode(Node):
         self.stuck_cycles = 0
         self.last_imu = None
         self.last_recovery_trigger_reason = 'none'
+        self.odom_history = []  # [(time_s, x, y)]
 
         self.recovery = RecoveryFSM(max_attempts=2, brake_steps=8, reverse_steps=15, reassess_steps=6)
 
@@ -56,6 +62,7 @@ class ModeControllerNode(Node):
         self.create_subscription(Float32, '/wheel_speed', self.wheel_speed_cb, 20)
         self.create_subscription(Bool, '/rear_obstacle', self.rear_obstacle_cb, 20)
         self.create_subscription(Imu, '/imu/data', self.imu_cb, 20)
+        self.create_subscription(Odometry, '/odom', self.odom_cb, 20)
 
         self.cmd_pub = self.create_publisher(DriveCommand, '/cmd_drive', 20)
         self.mode_pub = self.create_publisher(String, '/car_mode', 10)
@@ -96,6 +103,32 @@ class ModeControllerNode(Node):
     def imu_cb(self, msg: Imu) -> None:
         self.last_imu = msg
 
+    def odom_cb(self, msg: Odometry) -> None:
+        t = self.get_clock().now().nanoseconds * 1e-9
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        self.odom_history.append((t, x, y))
+        cutoff = t - self.odom_window * 2.0
+        while self.odom_history and self.odom_history[0][0] < cutoff:
+            self.odom_history.pop(0)
+
+    def _odom_making_progress(self) -> bool:
+        """Check actual displacement over a time window instead of relying on
+        commanded wheel_speed, which does not reflect physical motion in sim."""
+        if len(self.odom_history) < 2:
+            return True  # assume progress while data is sparse
+        now_t = self.odom_history[-1][0]
+        cutoff = now_t - self.odom_window
+        old = None
+        for t, x, y in self.odom_history:
+            if t >= cutoff:
+                old = (x, y)
+                break
+        if old is None:
+            return True
+        cur = (self.odom_history[-1][1], self.odom_history[-1][2])
+        return math.hypot(cur[0] - old[0], cur[1] - old[1]) > self.odom_min_disp
+
     def _front_clearance(self) -> float:
         if self.last_scan is None or not self.last_scan.ranges:
             return 10.0
@@ -117,11 +150,12 @@ class ModeControllerNode(Node):
 
     def _recovery_trigger_reason(self, nominal_cmd: DriveCommand, front_clear: float) -> str:
         forward_cmd = nominal_cmd.speed_mps > 0.1
-        moving = abs(self.wheel_speed) > self.progress_speed_thresh
+        # Use odom-based progress detection (works in sim, unlike wheel_speed).
+        moving = self._odom_making_progress()
         if forward_cmd and not moving:
             self.stuck_cycles += 1
         else:
-            self.stuck_cycles = max(0, self.stuck_cycles - 1)
+            self.stuck_cycles = 0  # full reset when progress is detected
 
         left_c, right_c = self._side_clearance()
         side_asym = abs(left_c - right_c) > 0.18
@@ -140,7 +174,7 @@ class ModeControllerNode(Node):
         return 'none'
 
     def _can_forward_reorient(self, front_clear: float, left_clear: float, right_clear: float) -> bool:
-        if self.rear_obstacle is False:
+        if not self.rear_obstacle:
             return False
         if front_clear < (self.front_blocked_m + 0.10):
             return False
@@ -201,6 +235,13 @@ class ModeControllerNode(Node):
             out.steer_rad = self.cmd_reactive.steer_rad
             out.speed_mps = min(self.cmd_reactive.speed_mps, self.learn_speed_cap)
             out.emergency_brake = False
+            # LEARN-mode safety: reduce speed when front is close.
+            if front_clear < self.front_blocked_m:
+                out.speed_mps = min(out.speed_mps, 0.15)
+            if front_clear < 0.12:
+                out.speed_mps = 0.0
+                out.emergency_brake = True
+                emergency_brake = True
             trigger_reason = self._recovery_trigger_reason(out, front_clear)
             if trigger_reason != 'none':
                 self.mode = 'RECOVERY'
@@ -235,8 +276,6 @@ class ModeControllerNode(Node):
             rec_reason = rec_cmd.reason
 
             if rec_cmd.stage == RecoveryStage.REVERSE and self.rear_obstacle:
-                # Blocked reverse is not immediate STOPPED by default.
-                # Transition to BRAKE->REASSESS and attempt bounded forward reorientation.
                 boxed_in = front_clear < self.front_blocked_m
                 self.recovery.mark_reverse_blocked(boxed_in=boxed_in)
                 rec_stage = self.recovery.stage
@@ -265,7 +304,7 @@ class ModeControllerNode(Node):
             rs.reason = rec_reason
             self.recovery_pub.publish(rs)
 
-        if self.mode != 'RECOVERY' and abs(self.wheel_speed) > self.progress_speed_thresh:
+        if self.mode != 'RECOVERY' and self._odom_making_progress():
             self.recovery.reset_runtime()
 
         self.cmd_pub.publish(out)
@@ -294,6 +333,8 @@ class ModeControllerNode(Node):
             'left_clearance_m': float(left_c),
             'right_clearance_m': float(right_c),
             'attempt_count': int(self.recovery.attempt),
+            'stuck_cycles': int(self.stuck_cycles),
+            'odom_progress': bool(self._odom_making_progress()),
         }
         recovery_debug.data = json.dumps(dbg, separators=(',', ':'))
         self.recovery_debug_pub.publish(recovery_debug)
