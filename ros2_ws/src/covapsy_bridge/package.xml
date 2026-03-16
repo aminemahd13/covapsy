@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>covapsy_bridge</name>
+  <version>0.1.0</version>
+  <description>STM32 bridge with watchdog and hard limits.</description>
+  <maintainer email="team@example.com">covapsy</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>covapsy_interfaces</depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

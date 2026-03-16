@@ -1,0 +1,47 @@
+scan_filter_node:
+  ros__parameters:
+    min_range_m: 0.05
+    max_range_m: 8.0
+    median_window: 5
+
+reactive_driver_node:
+  ros__parameters:
+    car_half_width_m: 0.11
+    safety_margin_m: 0.05
+    forward_fov_deg: 180.0
+    safety_bubble_radius_idx: 6
+    max_steer_rad: 0.35
+    steer_slew_rad_s: 1.2
+    min_speed_mps: 0.18
+    max_speed_mps: 0.7
+    ttc_limit_s: 0.65
+    target_center_bias: 0.4
+
+mode_controller_node:
+  ros__parameters:
+    start_mode: LEARN
+    learn_speed_cap_mps: 0.8
+    race_speed_cap_mps: 1.2
+    wrong_way_recovery_conf: 0.85
+    front_blocked_m: 0.18
+    stuck_cycles: 28
+
+track_learner_node:
+  ros__parameters:
+    sample_distance_m: 0.05
+    min_samples: 260
+    min_quality: 0.72
+
+direction_detector_node:
+  ros__parameters:
+    min_green_ratio: 0.03
+    min_red_ratio: 0.03
+
+pure_pursuit_node:
+  ros__parameters:
+    speed_max_mps: 1.3
+
+stm32_bridge_node:
+  ros__parameters:
+    competition_mode: false
+    require_start_signal: false

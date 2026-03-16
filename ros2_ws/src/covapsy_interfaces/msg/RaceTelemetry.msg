@@ -1,0 +1,11 @@
+std_msgs/Header header
+string mode
+float32 cmd_speed_mps
+float32 cmd_steer_rad
+float32 speed_cap_mps
+bool safety_veto
+bool emergency_brake
+bool wrong_direction
+float32 wrong_direction_confidence
+float32 front_clearance_m
+float32 track_quality_score

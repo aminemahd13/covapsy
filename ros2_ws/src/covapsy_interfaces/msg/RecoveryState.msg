@@ -1,0 +1,10 @@
+std_msgs/Header header
+uint8 NONE=0
+uint8 BRAKE=1
+uint8 REVERSE=2
+uint8 REASSESS=3
+uint8 ESCALATE=4
+uint8 FAILSAFE_STOP=5
+uint8 state
+uint8 attempt
+string reason

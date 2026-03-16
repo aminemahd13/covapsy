@@ -1,0 +1,37 @@
+scan_filter_node:
+  ros__parameters:
+    min_range_m: 0.05
+    max_range_m: 6.0
+    median_window: 5
+
+reactive_driver_node:
+  ros__parameters:
+    min_speed_mps: 0.12
+    max_speed_mps: 0.55
+
+pure_pursuit_node:
+  ros__parameters:
+    speed_min_mps: 0.15
+    speed_max_mps: 0.85
+    lookahead_min_m: 0.3
+    lookahead_max_m: 0.9
+
+mode_controller_node:
+  ros__parameters:
+    start_mode: RACE
+    race_speed_cap_mps: 0.85
+    safety_steer_veto_clearance_m: 0.28
+    front_blocked_m: 0.2
+
+track_learner_node:
+  ros__parameters:
+    min_quality: 0.8
+
+stm32_bridge_node:
+  ros__parameters:
+    competition_mode: true
+    require_start_signal: true
+    allow_restart_after_stop: false
+    watchdog_timeout_s: 0.2
+    max_speed_mps: 1.0
+    max_steer_rad: 0.42

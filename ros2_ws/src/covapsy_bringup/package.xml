@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>covapsy_bringup</name>
+  <version>0.1.0</version>
+  <description>Launch files and mode-specific parameters for CoVAPSy baseline.</description>
+  <maintainer email="team@example.com">covapsy</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>rclpy</depend>
+  <depend>launch</depend>
+  <depend>launch_ros</depend>
+  <depend>covapsy_lidar</depend>
+  <depend>covapsy_direction</depend>
+  <depend>covapsy_learning</depend>
+  <depend>covapsy_control</depend>
+  <depend>covapsy_bridge</depend>
+  <depend>covapsy_tools</depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

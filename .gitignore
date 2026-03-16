@@ -1,0 +1,21 @@
+# Python artifacts
+*/__pycache__/
+*.py[cod]
+
+# Test caches
+.pytest_cache/
+pytest-cache-files-*/
+
+# Webots/editor lock artifacts
+.~lock.*
+
+# STM32CubeIDE generated folders/files
+stm32_fw/**/cubeide_project/**/Debug/
+stm32_fw/**/cubeide_project/**/Release/
+stm32_fw/**/cubeide_project/**/.settings/
+stm32_fw/**/cubeide_project/**/*.launch
+stm32_fw/**/cubeide_project/**/STM32CubeIDE/
+ros2_ws/build
+ros2_ws/__pycache__
+ros2_ws/log
+ros2_ws/install
