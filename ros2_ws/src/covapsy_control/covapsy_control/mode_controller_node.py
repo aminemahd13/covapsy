@@ -21,6 +21,7 @@ class ModeControllerNode(Node):
         self.declare_parameter('front_blocked_m', 0.22)
         self.declare_parameter('race_speed_cap_mps', 1.5)
         self.declare_parameter('learn_speed_cap_mps', 0.7)
+        self.declare_parameter('race_entry_quality_threshold', 0.75)
         self.declare_parameter('safety_steer_veto_clearance_m', 0.3)
         self.declare_parameter('odom_progress_window_s', 1.0)
         self.declare_parameter('odom_min_displacement_m', 0.02)
@@ -32,6 +33,7 @@ class ModeControllerNode(Node):
         self.front_blocked_m = float(self.get_parameter('front_blocked_m').value)
         self.race_speed_cap = float(self.get_parameter('race_speed_cap_mps').value)
         self.learn_speed_cap = float(self.get_parameter('learn_speed_cap_mps').value)
+        self.race_entry_quality = float(self.get_parameter('race_entry_quality_threshold').value)
         self.safety_veto_clearance = float(self.get_parameter('safety_steer_veto_clearance_m').value)
         self.odom_window = float(self.get_parameter('odom_progress_window_s').value)
         self.odom_min_disp = float(self.get_parameter('odom_min_displacement_m').value)
@@ -200,14 +202,21 @@ class ModeControllerNode(Node):
         return out
 
     def _mode_logic(self):
+        track_ready = self.track_learned and self.track_quality >= self.race_entry_quality
+
         if self.mode == 'IDLE':
-            if self.track_learned and self.track_quality > 0.75:
+            if track_ready:
                 self.mode = 'RACE'
             else:
                 self.mode = 'LEARN'
 
-        if self.mode == 'LEARN' and self.track_learned and self.track_quality > 0.75:
+        if self.mode == 'LEARN' and track_ready:
             self.mode = 'RACE'
+
+        # If race was requested but no valid track is currently available,
+        # fall back to LEARN instead of stalling with zero pursuit command.
+        if self.mode == 'RACE' and not track_ready:
+            self.mode = 'LEARN'
 
     def tick(self) -> None:
         self._mode_logic()
@@ -292,7 +301,7 @@ class ModeControllerNode(Node):
                 self.mode = 'STOPPED'
             if rec_cmd.stage == RecoveryStage.ESCALATE:
                 self.last_recovery_trigger_reason = rec_reason
-                if self.track_learned and self.track_quality > 0.75:
+                if self.track_learned and self.track_quality >= self.race_entry_quality:
                     self.mode = 'RACE'
                 else:
                     self.mode = 'LEARN'

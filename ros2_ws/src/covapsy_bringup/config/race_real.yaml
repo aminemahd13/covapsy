@@ -21,6 +21,7 @@ mode_controller_node:
   ros__parameters:
     start_mode: RACE
     race_speed_cap_mps: 0.85
+    race_entry_quality_threshold: 0.8
     safety_steer_veto_clearance_m: 0.28
     front_blocked_m: 0.2
     stuck_cycles: 18
@@ -32,6 +33,8 @@ track_learner_node:
     min_quality: 0.8
     speed_profile_max_mps: 0.5
     speed_profile_curvature_gain: 0.6
+    track_store_path: /tmp/covapsy_track_real.json
+    auto_save_on_valid: true
 
 stm32_bridge_node:
   ros__parameters:

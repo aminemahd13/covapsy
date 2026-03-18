@@ -31,6 +31,7 @@ class PurePursuitNode(Node):
         self.curvature_gain = float(self.get_parameter('curvature_speed_gain').value)
 
         self.path: List[Tuple[float, float]] = []
+        self.path_speed_hints: List[float] = []
         self.last_scan = None
         self.last_steer = 0.0
         self.last_time = self.get_clock().now()
@@ -44,6 +45,12 @@ class PurePursuitNode(Node):
 
     def path_cb(self, msg: Path) -> None:
         self.path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
+        self.path_speed_hints = []
+        for p in msg.poses:
+            speed_hint = float(p.pose.position.z)
+            if not math.isfinite(speed_hint) or speed_hint < 0.05:
+                speed_hint = self.speed_max
+            self.path_speed_hints.append(speed_hint)
 
     def scan_cb(self, msg: LaserScan) -> None:
         self.last_scan = msg
@@ -62,10 +69,10 @@ class PurePursuitNode(Node):
                 best = i
         return best
 
-    def _target_point(self, x: float, y: float, lookahead: float) -> Tuple[float, float]:
+    def _target_point(self, start_idx: int, lookahead: float) -> Tuple[float, float]:
         if not self.path:
-            return x, y
-        i = self._closest_idx(x, y)
+            return 0.0, 0.0
+        i = max(0, min(start_idx, len(self.path) - 1))
         dsum = 0.0
         prev = self.path[i]
         for k in range(i + 1, i + len(self.path)):
@@ -76,6 +83,12 @@ class PurePursuitNode(Node):
                 return cur
             prev = cur
         return self.path[i]
+
+    def _speed_hint(self, idx: int) -> float:
+        if not self.path_speed_hints:
+            return self.speed_max
+        i = max(0, min(idx, len(self.path_speed_hints) - 1))
+        return max(self.speed_min, min(self.speed_max, self.path_speed_hints[i]))
 
     def _front_clearance(self) -> float:
         if self.last_scan is None or not self.last_scan.ranges:
@@ -96,7 +109,8 @@ class PurePursuitNode(Node):
         v = msg.twist.twist.linear.x
 
         lookahead = self._lookahead(max(0.0, v))
-        tx, ty = self._target_point(x, y, lookahead)
+        closest_i = self._closest_idx(x, y)
+        tx, ty = self._target_point(closest_i, lookahead)
 
         dx = tx - x
         dy = ty - y
@@ -122,6 +136,7 @@ class PurePursuitNode(Node):
         curvature_penalty = min(1.0, abs(curvature) / max(1e-3, self.curvature_gain))
         speed = self.speed_max * (1.0 - 0.55 * curvature_penalty)
         speed *= min(1.0, max(0.2, front_clear / 1.2))
+        speed = min(speed, self._speed_hint(closest_i))
         speed = max(self.speed_min, min(self.speed_max, speed))
 
         cmd = DriveCommand()

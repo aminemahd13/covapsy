@@ -217,13 +217,14 @@ ros2 topic pub /rear_obstacle std_msgs/msg/Bool "{data: true}" -r 10
 		- resamples and smooths trajectory
 		- computes quality metrics (closure, spacing, smoothness, consistency)
 		- validates against minimum quality threshold
+		- stores a cached valid track to JSON when `track_store_path` is set
 
 ### `covapsy_control`
 
 - `pure_pursuit_node`
 	- Subscribes: `/track_path`, `/odom`, `/scan_filtered`
 	- Publishes: `/cmd_drive_pursuit`
-	- Function: geometric pure pursuit with dynamic lookahead, steering slew limit, and clearance/curvature-aware speed scheduling.
+	- Function: geometric pure pursuit with dynamic lookahead, steering slew limit, and clearance/curvature-aware speed scheduling capped by per-waypoint speed hints from `/track_path` (`pose.position.z`).
 
 - `mode_controller_node`
 	- Subscribes:
@@ -262,6 +263,27 @@ The launch files load YAML profiles in `covapsy_bringup/config/`:
 - `race_sim.yaml`: race profile for simulation.
 - `learn_real.yaml`: conservative real-car learning profile with stricter bridge safety defaults.
 - `race_real.yaml`: real-car race profile with competition gating defaults.
+
+### Track Learning Persistence
+
+When `track_learner_node.track_store_path` is configured, a valid learned track is saved to disk as JSON and reused at next startup.
+
+- Sim default: `/tmp/covapsy_track_sim.json`
+- Real-car default: `/tmp/covapsy_track_real.json`
+
+Saved JSON contains:
+
+- `points`: array of `{x, y, speed_mps}` waypoints in `odom` frame
+- `quality`: latest validity/score metrics used for `/track_quality`
+- `sample_distance_m` and `frame_id` metadata
+
+At startup, the learner loads this file (if present and valid) and republishes:
+
+- `/track_path` (for `pure_pursuit_node`)
+- `/track_quality`
+- `/track_learned`
+
+This allows race launches to reuse a previously learned track immediately, while still updating it online when new valid laps are learned.
 
 Important bridge defaults in real-car profiles include:
 

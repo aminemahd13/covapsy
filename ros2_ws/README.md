@@ -100,12 +100,14 @@ ros2_ws/
   - pub: /track_path (nav_msgs/msg/Path)
   - pub: /track_quality (covapsy_interfaces/msg/TrackQuality)
   - pub: /track_learned (std_msgs/msg/Bool)
+  - optional persistence: saves/loads learned track JSON via `track_store_path`
 
 - pure_pursuit_node
   - sub: /track_path (nav_msgs/msg/Path)
   - sub: /odom (nav_msgs/msg/Odometry)
   - sub: /scan_filtered (sensor_msgs/msg/LaserScan)
   - pub: /cmd_drive_pursuit (covapsy_interfaces/msg/DriveCommand)
+  - uses `track_path` waypoint `pose.position.z` as optional speed hint cap
 
 - mode_controller_node
   - sub: /cmd_drive_reactive (covapsy_interfaces/msg/DriveCommand)
