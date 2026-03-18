@@ -236,7 +236,7 @@ ros2 topic pub /rear_obstacle std_msgs/msg/Bool "{data: true}" -r 10
 	- Function:
 		- mode transitions (`IDLE`, `LEARN`, `RACE`, `RECOVERY`, `STOPPED`)
 		- LEARN: reactive primary with speed cap
-		- RACE: pursuit nominal + reactive safety overlay
+		- RACE: pursuit nominal + LiDAR reactive obstacle-avoidance blend + safety overlay
 		- RECOVERY: bounded FSM (BRAKE -> REVERSE -> REASSESS -> ESCALATE -> FAILSAFE_STOP)
 		- wrong-way/no-progress/wedge trigger detection
 
@@ -268,8 +268,8 @@ The launch files load YAML profiles in `covapsy_bringup/config/`:
 
 When `track_learner_node.track_store_path` is configured, a valid learned track is saved to disk as JSON and reused at next startup.
 
-- Sim default: `/tmp/covapsy_track_sim.json`
-- Real-car default: `/tmp/covapsy_track_real.json`
+- Sim default: `~/.covapsy/track_sim.json`
+- Real-car default: `~/.covapsy/track_real.json`
 
 Saved JSON contains:
 
@@ -284,6 +284,8 @@ At startup, the learner loads this file (if present and valid) and republishes:
 - `/track_learned`
 
 This allows race launches to reuse a previously learned track immediately, while still updating it online when new valid laps are learned.
+
+In race profiles, `freeze_after_valid: true` keeps the loaded learned track fixed during traffic racing so dynamic obstacles (other cars) do not overwrite the stored map.
 
 Important bridge defaults in real-car profiles include:
 

@@ -24,6 +24,8 @@ mode_controller_node:
     learn_speed_cap_mps: 0.8
     race_speed_cap_mps: 1.2
     race_entry_quality_threshold: 0.5
+    race_obstacle_avoidance_enabled: true
+    race_reactive_blend_clearance_m: 0.34
     wrong_way_recovery_conf: 0.85
     front_blocked_m: 0.18
     stuck_cycles: 15               # was 28: faster stuck detection
@@ -38,8 +40,9 @@ track_learner_node:
     max_path_length_m: 180.0
     speed_profile_max_mps: 0.6       # conservative max for learned path
     speed_profile_curvature_gain: 0.7 # curvature speed penalty
-    track_store_path: /tmp/covapsy_track_sim.json
+    track_store_path: ~/.covapsy/track_sim.json
     auto_save_on_valid: true
+    freeze_after_valid: false
 
 direction_detector_node:
   ros__parameters:

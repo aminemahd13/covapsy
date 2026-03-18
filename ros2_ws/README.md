@@ -100,7 +100,8 @@ ros2_ws/
   - pub: /track_path (nav_msgs/msg/Path)
   - pub: /track_quality (covapsy_interfaces/msg/TrackQuality)
   - pub: /track_learned (std_msgs/msg/Bool)
-  - optional persistence: saves/loads learned track JSON via `track_store_path`
+  - optional persistence: saves/loads learned track JSON via `track_store_path` (defaults in profiles: `~/.covapsy/track_sim.json`, `~/.covapsy/track_real.json`)
+  - race profiles set `freeze_after_valid: true` to keep the learned map fixed during traffic racing
 
 - pure_pursuit_node
   - sub: /track_path (nav_msgs/msg/Path)
@@ -124,6 +125,7 @@ ros2_ws/
   - pub: /car_mode (std_msgs/msg/String)
   - pub: /recovery_state (covapsy_interfaces/msg/RecoveryState)
   - pub: /race_telemetry (covapsy_interfaces/msg/RaceTelemetry)
+  - race behavior: pursuit tracking with reactive LiDAR obstacle-avoidance blend and safety caps
 
 - stm32_bridge_node
   - sub: /cmd_drive (covapsy_interfaces/msg/DriveCommand)

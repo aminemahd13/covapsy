@@ -27,6 +27,7 @@ class TrackLearnerNode(Node):
         self.declare_parameter('max_path_length_m', 50.0)
         self.declare_parameter('track_store_path', '')
         self.declare_parameter('auto_save_on_valid', True)
+        self.declare_parameter('freeze_after_valid', False)
 
         self.sample_distance = float(self.get_parameter('sample_distance_m').value)
         self.min_samples = int(self.get_parameter('min_samples').value)
@@ -38,7 +39,10 @@ class TrackLearnerNode(Node):
         self.min_path_len = float(self.get_parameter('min_path_length_m').value)
         self.max_path_len = float(self.get_parameter('max_path_length_m').value)
         self.track_store_path = str(self.get_parameter('track_store_path').value).strip()
+        if self.track_store_path:
+            self.track_store_path = os.path.abspath(os.path.expanduser(self.track_store_path))
         self.auto_save_on_valid = bool(self.get_parameter('auto_save_on_valid').value)
+        self.freeze_after_valid = bool(self.get_parameter('freeze_after_valid').value)
 
         self.last_scan = None
         self.last_dir = DirectionState.DIR_UNKNOWN
@@ -48,6 +52,7 @@ class TrackLearnerNode(Node):
         self.cached_track_speeds: List[float] = []
         self.cached_track_quality: Optional[Dict[str, Any]] = None
         self._last_saved_signature = ''
+        self.track_frozen = False
 
         self.scan_sub = self.create_subscription(LaserScan, '/scan_filtered', self.scan_cb, 20)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_cb, 30)
@@ -92,6 +97,8 @@ class TrackLearnerNode(Node):
         return left, right
 
     def odom_cb(self, msg: Odometry) -> None:
+        if self.track_frozen:
+            return
         if self.last_scan is None:
             return
 
@@ -214,6 +221,8 @@ class TrackLearnerNode(Node):
             quality = self._quality_from_dict(quality_data, default_reason='loaded_from_file')
             if len(pts) >= 3 and quality.is_valid:
                 self._cache_valid_track(pts, speeds, quality)
+                if self.freeze_after_valid:
+                    self.track_frozen = True
                 self.get_logger().info(
                     f'loaded cached track ({len(pts)} points, score={quality.score:.3f}) from {self.track_store_path}'
                 )
@@ -398,6 +407,9 @@ class TrackLearnerNode(Node):
         return pts
 
     def publish_outputs(self) -> None:
+        if self.track_frozen and self._publish_cached_track(reason='frozen_cached_track'):
+            return
+
         if len(self.samples) < self.min_samples:
             if self._publish_cached_track(reason='serving_cached_track'):
                 return
@@ -460,6 +472,8 @@ class TrackLearnerNode(Node):
         if quality.is_valid:
             self._cache_valid_track(pts, speeds, quality)
             self._save_track_to_file(pts, speeds, quality)
+            if self.freeze_after_valid:
+                self.track_frozen = True
             self._publish_track(pts, speeds, quality)
             return
 

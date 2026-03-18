@@ -23,6 +23,8 @@ class ModeControllerNode(Node):
         self.declare_parameter('learn_speed_cap_mps', 0.7)
         self.declare_parameter('race_entry_quality_threshold', 0.75)
         self.declare_parameter('safety_steer_veto_clearance_m', 0.3)
+        self.declare_parameter('race_obstacle_avoidance_enabled', True)
+        self.declare_parameter('race_reactive_blend_clearance_m', 0.32)
         self.declare_parameter('odom_progress_window_s', 1.0)
         self.declare_parameter('odom_min_displacement_m', 0.02)
 
@@ -35,6 +37,8 @@ class ModeControllerNode(Node):
         self.learn_speed_cap = float(self.get_parameter('learn_speed_cap_mps').value)
         self.race_entry_quality = float(self.get_parameter('race_entry_quality_threshold').value)
         self.safety_veto_clearance = float(self.get_parameter('safety_steer_veto_clearance_m').value)
+        self.race_obstacle_avoid = bool(self.get_parameter('race_obstacle_avoidance_enabled').value)
+        self.race_reactive_blend_clearance = float(self.get_parameter('race_reactive_blend_clearance_m').value)
         self.odom_window = float(self.get_parameter('odom_progress_window_s').value)
         self.odom_min_disp = float(self.get_parameter('odom_min_displacement_m').value)
 
@@ -192,7 +196,13 @@ class ModeControllerNode(Node):
         out.steer_rad = nominal.steer_rad
         out.speed_mps = min(nominal.speed_mps, self.race_speed_cap)
 
-        if front_clear < self.safety_veto_clearance and abs(nominal.steer_rad) > 0.3:
+        # Keep race tracking nominally on pursuit, but when an obstacle is close
+        # in front, bias to reactive LiDAR steering/speed for local avoidance.
+        if self.race_obstacle_avoid and front_clear < self.race_reactive_blend_clearance:
+            out.steer_rad = self.cmd_reactive.steer_rad
+            out.speed_mps = min(out.speed_mps, max(0.0, self.cmd_reactive.speed_mps))
+
+        if front_clear < self.safety_veto_clearance and abs(out.steer_rad) > 0.3:
             out.steer_rad = 0.0
         if front_clear < self.front_blocked_m:
             out.speed_mps = min(out.speed_mps, 0.15)

@@ -23,6 +23,8 @@ mode_controller_node:
     race_speed_cap_mps: 1.7
     learn_speed_cap_mps: 0.8
     race_entry_quality_threshold: 0.5
+    race_obstacle_avoidance_enabled: true
+    race_reactive_blend_clearance_m: 0.34
     front_blocked_m: 0.22
     safety_steer_veto_clearance_m: 0.3
     stuck_cycles: 15
@@ -34,8 +36,9 @@ track_learner_node:
     min_quality: 0.5
     speed_profile_max_mps: 0.8
     speed_profile_curvature_gain: 0.6
-    track_store_path: /tmp/covapsy_track_sim.json
+    track_store_path: ~/.covapsy/track_sim.json
     auto_save_on_valid: true
+    freeze_after_valid: true
 
 stm32_bridge_node:
   ros__parameters:
