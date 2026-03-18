@@ -22,6 +22,7 @@ mode_controller_node:
     start_mode: RACE
     race_speed_cap_mps: 0.85
     race_entry_quality_threshold: 0.8
+    auto_switch_learn_to_race: true
     race_obstacle_avoidance_enabled: true
     race_reactive_blend_clearance_m: 0.3
     safety_steer_veto_clearance_m: 0.28

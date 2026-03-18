@@ -23,6 +23,7 @@ mode_controller_node:
     race_speed_cap_mps: 1.7
     learn_speed_cap_mps: 0.8
     race_entry_quality_threshold: 0.5
+    auto_switch_learn_to_race: true
     race_obstacle_avoidance_enabled: true
     race_reactive_blend_clearance_m: 0.34
     front_blocked_m: 0.22

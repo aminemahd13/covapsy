@@ -287,6 +287,8 @@ This allows race launches to reuse a previously learned track immediately, while
 
 In race profiles, `freeze_after_valid: true` keeps the loaded learned track fixed during traffic racing so dynamic obstacles (other cars) do not overwrite the stored map.
 
+Learning profiles set `auto_switch_learn_to_race: false`, so the car stays in LEARN during setup laps (no unexpected stop due to switching to RACE without pursuit).
+
 Important bridge defaults in real-car profiles include:
 
 - `competition_mode: true`

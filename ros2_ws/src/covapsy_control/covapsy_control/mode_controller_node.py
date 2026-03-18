@@ -22,6 +22,7 @@ class ModeControllerNode(Node):
         self.declare_parameter('race_speed_cap_mps', 1.5)
         self.declare_parameter('learn_speed_cap_mps', 0.7)
         self.declare_parameter('race_entry_quality_threshold', 0.75)
+        self.declare_parameter('auto_switch_learn_to_race', True)
         self.declare_parameter('safety_steer_veto_clearance_m', 0.3)
         self.declare_parameter('race_obstacle_avoidance_enabled', True)
         self.declare_parameter('race_reactive_blend_clearance_m', 0.32)
@@ -36,6 +37,7 @@ class ModeControllerNode(Node):
         self.race_speed_cap = float(self.get_parameter('race_speed_cap_mps').value)
         self.learn_speed_cap = float(self.get_parameter('learn_speed_cap_mps').value)
         self.race_entry_quality = float(self.get_parameter('race_entry_quality_threshold').value)
+        self.auto_switch_learn_to_race = bool(self.get_parameter('auto_switch_learn_to_race').value)
         self.safety_veto_clearance = float(self.get_parameter('safety_steer_veto_clearance_m').value)
         self.race_obstacle_avoid = bool(self.get_parameter('race_obstacle_avoidance_enabled').value)
         self.race_reactive_blend_clearance = float(self.get_parameter('race_reactive_blend_clearance_m').value)
@@ -220,7 +222,7 @@ class ModeControllerNode(Node):
             else:
                 self.mode = 'LEARN'
 
-        if self.mode == 'LEARN' and track_ready:
+        if self.mode == 'LEARN' and track_ready and self.auto_switch_learn_to_race:
             self.mode = 'RACE'
 
         # If race was requested but no valid track is currently available,
