@@ -26,6 +26,10 @@ class ModeControllerNode(Node):
         self.declare_parameter('safety_steer_veto_clearance_m', 0.3)
         self.declare_parameter('race_obstacle_avoidance_enabled', True)
         self.declare_parameter('race_reactive_blend_clearance_m', 0.32)
+        self.declare_parameter('race_ttc_target_s', 1.0)
+        self.declare_parameter('race_ttc_min_speed_mps', 0.25)
+        self.declare_parameter('race_side_slowdown_clearance_m', 0.18)
+        self.declare_parameter('race_side_critical_clearance_m', 0.11)
         self.declare_parameter('odom_progress_window_s', 1.0)
         self.declare_parameter('odom_min_displacement_m', 0.02)
 
@@ -41,6 +45,10 @@ class ModeControllerNode(Node):
         self.safety_veto_clearance = float(self.get_parameter('safety_steer_veto_clearance_m').value)
         self.race_obstacle_avoid = bool(self.get_parameter('race_obstacle_avoidance_enabled').value)
         self.race_reactive_blend_clearance = float(self.get_parameter('race_reactive_blend_clearance_m').value)
+        self.race_ttc_target = float(self.get_parameter('race_ttc_target_s').value)
+        self.race_ttc_min_speed = float(self.get_parameter('race_ttc_min_speed_mps').value)
+        self.race_side_slowdown_clearance = float(self.get_parameter('race_side_slowdown_clearance_m').value)
+        self.race_side_critical_clearance = float(self.get_parameter('race_side_critical_clearance_m').value)
         self.odom_window = float(self.get_parameter('odom_progress_window_s').value)
         self.odom_min_disp = float(self.get_parameter('odom_min_displacement_m').value)
 
@@ -190,7 +198,7 @@ class ModeControllerNode(Node):
             return False
         return True
 
-    def _safety_overlay(self, nominal: DriveCommand, front_clear: float) -> DriveCommand:
+    def _safety_overlay(self, nominal: DriveCommand, front_clear: float, left_clear: float, right_clear: float) -> DriveCommand:
         out = DriveCommand()
         out.header.stamp = self.get_clock().now().to_msg()
         out.header.frame_id = 'base_link'
@@ -199,15 +207,38 @@ class ModeControllerNode(Node):
         out.speed_mps = min(nominal.speed_mps, self.race_speed_cap)
 
         # Keep race tracking nominally on pursuit, but when an obstacle is close
-        # in front, progressively blend toward reactive LiDAR steering/speed.
-        if self.race_obstacle_avoid and front_clear < self.race_reactive_blend_clearance:
+        # in front (or TTC is short), progressively blend toward reactive LiDAR
+        # steering/speed for local avoidance.
+        if self.race_obstacle_avoid:
             denom = max(1e-3, self.race_reactive_blend_clearance - self.front_blocked_m)
-            alpha = min(1.0, max(0.0, (self.race_reactive_blend_clearance - front_clear) / denom))
-            reactive_steer = float(self.cmd_reactive.steer_rad)
-            reactive_speed = max(0.0, float(self.cmd_reactive.speed_mps))
-            out.steer_rad = (1.0 - alpha) * out.steer_rad + alpha * reactive_steer
-            blended_speed = (1.0 - alpha) * out.speed_mps + alpha * reactive_speed
-            out.speed_mps = min(out.speed_mps, blended_speed)
+            alpha_clear = min(1.0, max(0.0, (self.race_reactive_blend_clearance - front_clear) / denom))
+
+            speed_for_ttc = max(self.race_ttc_min_speed, out.speed_mps)
+            ttc = front_clear / max(0.05, speed_for_ttc)
+            ttc_target = max(0.2, self.race_ttc_target)
+            alpha_ttc = min(1.0, max(0.0, (ttc_target - ttc) / ttc_target))
+
+            alpha = max(alpha_clear, alpha_ttc)
+            if alpha > 1e-4:
+                reactive_steer = float(self.cmd_reactive.steer_rad)
+                reactive_speed = max(0.0, float(self.cmd_reactive.speed_mps))
+                out.steer_rad = (1.0 - alpha) * out.steer_rad + alpha * reactive_steer
+                blended_speed = (1.0 - alpha) * out.speed_mps + alpha * reactive_speed
+                out.speed_mps = min(out.speed_mps, blended_speed)
+
+            # TTC speed governor to avoid rear-ending slower traffic.
+            out.speed_mps = min(out.speed_mps, front_clear / ttc_target)
+
+            # Side-clearance guard for tight side-by-side traffic.
+            min_side = min(left_clear, right_clear)
+            if min_side < self.race_side_slowdown_clearance:
+                if min_side <= self.race_side_critical_clearance:
+                    side_factor = 0.35
+                else:
+                    span = max(1e-3, self.race_side_slowdown_clearance - self.race_side_critical_clearance)
+                    ratio = (min_side - self.race_side_critical_clearance) / span
+                    side_factor = 0.35 + 0.65 * ratio
+                out.speed_mps *= side_factor
 
         # Near obstacles, reduce speed instead of zeroing steering, which can
         # destabilize cornering and produce straight-into-wall behavior.
@@ -276,7 +307,7 @@ class ModeControllerNode(Node):
                 self.last_recovery_trigger_reason = trigger_reason
                 self.recovery.trigger()
         elif self.mode == 'RACE':
-            out = self._safety_overlay(self.cmd_pursuit, front_clear)
+            out = self._safety_overlay(self.cmd_pursuit, front_clear, left_c, right_c)
             out.emergency_brake = front_clear < 0.12
             emergency_brake = out.emergency_brake
             safety_veto = (

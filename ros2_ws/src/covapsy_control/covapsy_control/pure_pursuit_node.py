@@ -21,6 +21,7 @@ class PurePursuitNode(Node):
         self.declare_parameter('speed_max_mps', 1.6)
         self.declare_parameter('curvature_speed_gain', 0.9)
         self.declare_parameter('speed_hint_scale', 1.0)
+        self.declare_parameter('speed_hint_influence', 1.0)
 
         self.wheelbase = float(self.get_parameter('wheelbase_m').value)
         self.lh_min = float(self.get_parameter('lookahead_min_m').value)
@@ -31,6 +32,7 @@ class PurePursuitNode(Node):
         self.speed_max = float(self.get_parameter('speed_max_mps').value)
         self.curvature_gain = float(self.get_parameter('curvature_speed_gain').value)
         self.speed_hint_scale = float(self.get_parameter('speed_hint_scale').value)
+        self.speed_hint_influence = float(self.get_parameter('speed_hint_influence').value)
 
         self.path: List[Tuple[float, float]] = []
         self.path_speed_hints: List[float] = []
@@ -137,9 +139,13 @@ class PurePursuitNode(Node):
 
         front_clear = self._front_clearance()
         curvature_penalty = min(1.0, abs(curvature) / max(1e-3, self.curvature_gain))
-        speed = self.speed_max * (1.0 - 0.55 * curvature_penalty)
-        speed *= min(1.0, max(0.2, front_clear / 1.2))
-        speed = min(speed, self._speed_hint(closest_i))
+        base_speed = self.speed_max * (1.0 - 0.55 * curvature_penalty)
+        base_speed *= min(1.0, max(0.2, front_clear / 1.2))
+
+        hint_speed = self._speed_hint(closest_i)
+        hint_influence = min(1.0, max(0.0, self.speed_hint_influence))
+        soft_hint_cap = base_speed + hint_influence * (hint_speed - base_speed)
+        speed = min(base_speed, soft_hint_cap)
         speed = max(self.speed_min, min(self.speed_max, speed))
 
         cmd = DriveCommand()
