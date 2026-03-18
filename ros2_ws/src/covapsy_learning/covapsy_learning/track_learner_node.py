@@ -141,7 +141,7 @@ class TrackLearnerNode(Node):
             carry = seg - d
         return out
 
-    def _smooth(self, pts: List[Tuple[float, float]], k: int = 5) -> List[Tuple[float, float]]:
+    def _smooth(self, pts: List[Tuple[float, float]], k: int = 5, closed: bool = False) -> List[Tuple[float, float]]:
         if len(pts) < k:
             return pts
         half = k // 2
@@ -150,7 +150,11 @@ class TrackLearnerNode(Node):
             xs = []
             ys = []
             for j in range(i - half, i + half + 1):
-                p = pts[j % len(pts)]
+                if closed:
+                    p = pts[j % len(pts)]
+                else:
+                    jj = min(max(j, 0), len(pts) - 1)
+                    p = pts[jj]
                 xs.append(p[0])
                 ys.append(p[1])
             sm.append((sum(xs) / len(xs), sum(ys) / len(ys)))
@@ -211,6 +215,38 @@ class TrackLearnerNode(Node):
             speeds = smoothed
         return speeds
 
+    def _extract_closed_loop(self, pts: List[Tuple[float, float]], closure_thresh_m: float = 1.0) -> List[Tuple[float, float]]:
+        """Return a near-closed recent loop when possible, otherwise keep open path.
+
+        Samples accumulate over time (including revisits). For quality/scoring we prefer
+        the most recent lap-like segment rather than the full history.
+        """
+        if len(pts) < 30:
+            return pts
+
+        direct_closure = math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1])
+        if direct_closure < closure_thresh_m:
+            return pts + [pts[0]]
+
+        # Find best earlier point that closes with the latest point while keeping
+        # enough arc length to represent a lap-like segment.
+        min_gap = max(100, int(0.4 * self.min_samples))
+        best_i = -1
+        best_d = 1e9
+        end = len(pts) - 1
+        for i in range(0, end - min_gap):
+            d = math.hypot(pts[i][0] - pts[end][0], pts[i][1] - pts[end][1])
+            if d < best_d:
+                best_d = d
+                best_i = i
+
+        if best_i >= 0 and best_d < closure_thresh_m:
+            loop_pts = pts[best_i:]
+            if len(loop_pts) > 20:
+                return loop_pts + [loop_pts[0]]
+
+        return pts
+
     def publish_outputs(self) -> None:
         learned = Bool()
         quality = TrackQuality()
@@ -226,9 +262,11 @@ class TrackLearnerNode(Node):
             return
 
         pts = self._resample(self.samples, self.sample_distance)
-        pts = self._smooth(pts, 7)
-        if len(pts) > 20:
-            pts.append(pts[0])
+        pts = self._smooth(pts, 7, closed=False)
+        pts = self._extract_closed_loop(pts, closure_thresh_m=1.0)
+
+        is_closed = len(pts) > 1 and math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) < 1e-6
+        pts = self._smooth(pts, 7, closed=is_closed)
 
         closure = math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1])
         spacing = []

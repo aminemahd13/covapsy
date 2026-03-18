@@ -34,6 +34,7 @@ track_learner_node:
     sample_distance_m: 0.05
     min_samples: 260
     min_quality: 0.72
+    max_path_length_m: 180.0
     speed_profile_max_mps: 0.6       # conservative max for learned path
     speed_profile_curvature_gain: 0.7 # curvature speed penalty
 

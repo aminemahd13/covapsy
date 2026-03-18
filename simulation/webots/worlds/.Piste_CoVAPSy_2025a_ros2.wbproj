@@ -7,5 +7,5 @@ centralWidgetVisible: 1
 orthographicViewHeight: 1
 textFiles: -1
 consoles: Console:All:All
-renderingDevicePerspectives: TT02_ros2:RealSenseDepth;1;0.931596;0.669463;0.381625
-renderingDevicePerspectives: TT02_ros2:RealSenseRGB;1;0.573626;0.59396;0.0194346
+renderingDevicePerspectives: TT02_ros2:RealSenseDepth;1;0.931596;0.627516;0.235457
+renderingDevicePerspectives: TT02_ros2:RealSenseRGB;1;0.573626;0.614933;0.0265647
