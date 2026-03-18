@@ -100,7 +100,7 @@ ros2_ws/
   - pub: /track_path (nav_msgs/msg/Path)
   - pub: /track_quality (covapsy_interfaces/msg/TrackQuality)
   - pub: /track_learned (std_msgs/msg/Bool)
-  - optional persistence: saves/loads learned track JSON via `track_store_path` (defaults in profiles: `~/.covapsy/track_sim.json`, `~/.covapsy/track_real.json`)
+  - optional persistence: saves/loads learned track JSON via `track_store_path` (defaults in profiles: `/home/amine/Desktop/covapsy/track/track_sim.json`, `/home/amine/Desktop/covapsy/track/track_real.json`)
   - race profiles set `freeze_after_valid: true` to keep the learned map fixed during traffic racing
 
 - pure_pursuit_node

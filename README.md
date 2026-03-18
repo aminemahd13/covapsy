@@ -268,8 +268,8 @@ The launch files load YAML profiles in `covapsy_bringup/config/`:
 
 When `track_learner_node.track_store_path` is configured, a valid learned track is saved to disk as JSON and reused at next startup.
 
-- Sim default: `~/.covapsy/track_sim.json`
-- Real-car default: `~/.covapsy/track_real.json`
+- Sim default: `/home/amine/Desktop/covapsy/track/track_sim.json`
+- Real-car default: `/home/amine/Desktop/covapsy/track/track_real.json`
 
 Saved JSON contains:
 

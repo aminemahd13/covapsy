@@ -37,7 +37,7 @@ track_learner_node:
     min_quality: 0.5
     speed_profile_max_mps: 0.8
     speed_profile_curvature_gain: 0.6
-    track_store_path: ~/.covapsy/track_sim.json
+    track_store_path: /home/amine/Desktop/covapsy/track/track_sim.json
     auto_save_on_valid: true
     freeze_after_valid: true
 
