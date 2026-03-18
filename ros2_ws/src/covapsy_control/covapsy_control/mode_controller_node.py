@@ -72,6 +72,7 @@ class ModeControllerNode(Node):
         self.track_closure_error_m = 999.0
         self.track_smoothness = 0.0
         self.track_spacing_stddev = 999.0
+        self.track_ready_latched = False
         self.last_scan = None
         self.wheel_speed = 0.0
         self.rear_obstacle = False
@@ -139,6 +140,19 @@ class ModeControllerNode(Node):
             and self.track_closure_error_m <= self.race_entry_max_closure
         )
 
+    @staticmethod
+    def _finite_positive(values, min_val: float = 0.05):
+        return [v for v in values if math.isfinite(v) and v > min_val]
+
+    @staticmethod
+    def _percentile(values, q: float, fallback: float) -> float:
+        if not values:
+            return fallback
+        q_clamped = min(1.0, max(0.0, q))
+        vals = sorted(values)
+        idx = int(q_clamped * (len(vals) - 1))
+        return float(vals[idx])
+
     def scan_cb(self, msg: LaserScan) -> None:
         self.last_scan = msg
 
@@ -183,7 +197,9 @@ class ModeControllerNode(Node):
         n = len(self.last_scan.ranges)
         mid = n // 2
         sector = self.last_scan.ranges[max(0, mid - n // 20):min(n, mid + n // 20)]
-        return max(0.05, min(sector)) if sector else 10.0
+        vals = self._finite_positive(sector, min_val=0.05)
+        # Use a low percentile instead of pure min to reduce single-ray outlier spikes.
+        return max(0.05, self._percentile(vals, q=0.15, fallback=10.0))
 
     def _side_clearance(self):
         if self.last_scan is None or not self.last_scan.ranges:
@@ -192,15 +208,18 @@ class ModeControllerNode(Node):
         mid = n // 2
         left = self.last_scan.ranges[mid + n // 8:min(n, mid + n // 3)]
         right = self.last_scan.ranges[max(0, mid - n // 3):max(1, mid - n // 8)]
-        left_c = min(left) if left else 1.0
-        right_c = min(right) if right else 1.0
+        left_vals = self._finite_positive(left, min_val=0.05)
+        right_vals = self._finite_positive(right, min_val=0.05)
+        left_c = self._percentile(left_vals, q=0.2, fallback=1.0)
+        right_c = self._percentile(right_vals, q=0.2, fallback=1.0)
         return left_c, right_c
 
-    def _recovery_trigger_reason(self, nominal_cmd: DriveCommand, front_clear: float) -> str:
+    def _recovery_trigger_reason(self, nominal_cmd: DriveCommand, front_clear: float, traffic_follow_ok: bool = False) -> str:
         forward_cmd = nominal_cmd.speed_mps > 0.1
+        traffic_following = bool(traffic_follow_ok and front_clear < self.race_reactive_blend_clearance)
         # Use odom-based progress detection (works in sim, unlike wheel_speed).
         moving = self._odom_making_progress()
-        if forward_cmd and not moving:
+        if forward_cmd and not moving and not traffic_following:
             self.stuck_cycles += 1
         else:
             self.stuck_cycles = 0  # full reset when progress is detected
@@ -210,6 +229,10 @@ class ModeControllerNode(Node):
         wedge_signature = front_clear < self.front_blocked_m and side_asym and forward_cmd and not moving
 
         wrong_way = self.wrong_direction and self.wrong_conf > self.wrong_way_recovery_conf
+
+        # In race traffic, following a slower car should not trigger recovery.
+        if traffic_following and front_clear >= 0.12 and not wrong_way:
+            return 'none'
 
         if front_clear < 0.12:
             return 'front_critically_blocked'
@@ -309,19 +332,22 @@ class ModeControllerNode(Node):
 
     def _mode_logic(self):
         track_ready = self._track_ready()
+        if track_ready:
+            self.track_ready_latched = True
+        effective_track_ready = track_ready or self.track_ready_latched
 
         if self.mode == 'IDLE':
-            if track_ready:
+            if effective_track_ready:
                 self.mode = 'RACE'
             else:
                 self.mode = 'LEARN'
 
-        if self.mode == 'LEARN' and track_ready and self.auto_switch_learn_to_race:
+        if self.mode == 'LEARN' and effective_track_ready and self.auto_switch_learn_to_race:
             self.mode = 'RACE'
 
         # If race was requested but no valid track is currently available,
         # fall back to LEARN instead of stalling with zero pursuit command.
-        if self.mode == 'RACE' and not track_ready:
+        if self.mode == 'RACE' and not effective_track_ready:
             self.mode = 'LEARN'
 
     def tick(self) -> None:
@@ -370,7 +396,7 @@ class ModeControllerNode(Node):
                 out.speed_mps < self.cmd_pursuit.speed_mps - 1e-6
                 or abs(out.steer_rad - self.cmd_pursuit.steer_rad) > 1e-6
             )
-            trigger_reason = self._recovery_trigger_reason(self.cmd_pursuit, front_clear)
+            trigger_reason = self._recovery_trigger_reason(self.cmd_pursuit, front_clear, traffic_follow_ok=True)
             if trigger_reason != 'none':
                 self.mode = 'RECOVERY'
                 self.last_recovery_trigger_reason = trigger_reason
@@ -407,7 +433,7 @@ class ModeControllerNode(Node):
                 self.mode = 'STOPPED'
             if rec_cmd.stage == RecoveryStage.ESCALATE:
                 self.last_recovery_trigger_reason = rec_reason
-                if self._track_ready():
+                if self._track_ready() or self.track_ready_latched:
                     self.mode = 'RACE'
                 else:
                     self.mode = 'LEARN'
