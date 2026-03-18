@@ -7,11 +7,11 @@ centralWidgetVisible: 1
 orthographicViewHeight: 1
 textFiles: -1
 consoles: Console:All:All
-renderingDevicePerspectives: TT02_ego_ros2:RealSenseDepth;1;1;0;0
-renderingDevicePerspectives: TT02_ego_ros2:RealSenseRGB;1;1;0;0
+renderingDevicePerspectives: TT02_ego_ros2:RealSenseDepth;1;1;0.715983;0.422261
+renderingDevicePerspectives: TT02_ego_ros2:RealSenseRGB;1;1;0.617711;0.0194346
 renderingDevicePerspectives: TT02_opp_blue:RealSenseDepth;1;1;0;0
-renderingDevicePerspectives: TT02_opp_blue:RealSenseRGB;1;1;0;0
+renderingDevicePerspectives: TT02_opp_blue:RealSenseRGB;1;1;0.597193;0.378092
 renderingDevicePerspectives: TT02_opp_violet:RealSenseDepth;1;1;0;0
-renderingDevicePerspectives: TT02_opp_violet:RealSenseRGB;1;1;0;0
-renderingDevicePerspectives: TT02_opp_yellow:RealSenseDepth;1;1;0;0
-renderingDevicePerspectives: TT02_opp_yellow:RealSenseRGB;1;1;0;0
+renderingDevicePerspectives: TT02_opp_violet:RealSenseRGB;1;1;0.611232;0.355123
+renderingDevicePerspectives: TT02_opp_yellow:RealSenseDepth;1;1;0.00215981;0.00353357
+renderingDevicePerspectives: TT02_opp_yellow:RealSenseRGB;1;1;0.614471;0.372792

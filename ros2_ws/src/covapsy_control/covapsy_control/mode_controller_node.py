@@ -199,13 +199,20 @@ class ModeControllerNode(Node):
         out.speed_mps = min(nominal.speed_mps, self.race_speed_cap)
 
         # Keep race tracking nominally on pursuit, but when an obstacle is close
-        # in front, bias to reactive LiDAR steering/speed for local avoidance.
+        # in front, progressively blend toward reactive LiDAR steering/speed.
         if self.race_obstacle_avoid and front_clear < self.race_reactive_blend_clearance:
-            out.steer_rad = self.cmd_reactive.steer_rad
-            out.speed_mps = min(out.speed_mps, max(0.0, self.cmd_reactive.speed_mps))
+            denom = max(1e-3, self.race_reactive_blend_clearance - self.front_blocked_m)
+            alpha = min(1.0, max(0.0, (self.race_reactive_blend_clearance - front_clear) / denom))
+            reactive_steer = float(self.cmd_reactive.steer_rad)
+            reactive_speed = max(0.0, float(self.cmd_reactive.speed_mps))
+            out.steer_rad = (1.0 - alpha) * out.steer_rad + alpha * reactive_steer
+            blended_speed = (1.0 - alpha) * out.speed_mps + alpha * reactive_speed
+            out.speed_mps = min(out.speed_mps, blended_speed)
 
+        # Near obstacles, reduce speed instead of zeroing steering, which can
+        # destabilize cornering and produce straight-into-wall behavior.
         if front_clear < self.safety_veto_clearance and abs(out.steer_rad) > 0.3:
-            out.steer_rad = 0.0
+            out.speed_mps = min(out.speed_mps, 0.35)
         if front_clear < self.front_blocked_m:
             out.speed_mps = min(out.speed_mps, 0.15)
         if front_clear < 0.12:
