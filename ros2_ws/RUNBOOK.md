@@ -30,6 +30,8 @@ ros2 launch covapsy_bringup car_learning.launch.py
 ros2 launch covapsy_bringup car_race.launch.py
 ```
 
+Note: `sim_webots.launch.py mode:=race` auto-selects `Piste_CoVAPSy_2025a_multicar_ros2.wbt` unless `world:=...` is provided.
+
 ## sim_reactive Validation Commands
 
 ```bash

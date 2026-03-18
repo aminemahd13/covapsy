@@ -61,8 +61,9 @@ def reverse():
     """On the real car, there is a stop then a reverse movement for 1s."""
     driver.setCruisingSpeed(-1)  
 
-# Auto mode disabled by default
-autoMode = False
+# Start opponents in auto mode so multicar worlds are active without
+# requiring keyboard input in the Webots window.
+autoMode = True
 print("Click on the 3D view to start")
 print("a for auto mode (no manual mode on TT02_yellow), n for stop")
 

@@ -34,9 +34,10 @@ maxAngle = 0.28 # rad (strange, the car is defined for a limit of 0.31 rad...)
 driver.setSteeringAngle(angle)
 driver.setCruisingSpeed(speed)
 
-# Manual and auto modes disabled by default
+# Start opponents in auto mode so multicar worlds are active without
+# requiring keyboard input in the Webots window.
 manualMode = False
-autoMode = False
+autoMode = True
 
 print("Click on the 3D view to start")
 print("m for manual mode, a for auto mode, n for stop, l to display lidar data")

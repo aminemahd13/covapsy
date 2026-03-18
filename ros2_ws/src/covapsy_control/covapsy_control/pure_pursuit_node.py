@@ -20,6 +20,7 @@ class PurePursuitNode(Node):
         self.declare_parameter('speed_min_mps', 0.2)
         self.declare_parameter('speed_max_mps', 1.6)
         self.declare_parameter('curvature_speed_gain', 0.9)
+        self.declare_parameter('speed_hint_scale', 1.0)
 
         self.wheelbase = float(self.get_parameter('wheelbase_m').value)
         self.lh_min = float(self.get_parameter('lookahead_min_m').value)
@@ -29,6 +30,7 @@ class PurePursuitNode(Node):
         self.speed_min = float(self.get_parameter('speed_min_mps').value)
         self.speed_max = float(self.get_parameter('speed_max_mps').value)
         self.curvature_gain = float(self.get_parameter('curvature_speed_gain').value)
+        self.speed_hint_scale = float(self.get_parameter('speed_hint_scale').value)
 
         self.path: List[Tuple[float, float]] = []
         self.path_speed_hints: List[float] = []
@@ -88,7 +90,8 @@ class PurePursuitNode(Node):
         if not self.path_speed_hints:
             return self.speed_max
         i = max(0, min(idx, len(self.path_speed_hints) - 1))
-        return max(self.speed_min, min(self.speed_max, self.path_speed_hints[i]))
+        hinted = self.path_speed_hints[i] * max(0.1, self.speed_hint_scale)
+        return max(self.speed_min, min(self.speed_max, hinted))
 
     def _front_clearance(self) -> float:
         if self.last_scan is None or not self.last_scan.ranges:

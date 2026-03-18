@@ -7,20 +7,21 @@ scan_filter_node:
 reactive_driver_node:
   ros__parameters:
     min_speed_mps: 0.2
-    max_speed_mps: 1.0
+    max_speed_mps: 1.25
     corridor_centering_gain: 0.10
 
 pure_pursuit_node:
   ros__parameters:
-    speed_min_mps: 0.25
-    speed_max_mps: 1.7
-    lookahead_min_m: 0.35
-    lookahead_max_m: 1.2
+    speed_min_mps: 0.3
+    speed_max_mps: 2.2
+    lookahead_min_m: 0.4
+    lookahead_max_m: 1.35
+    speed_hint_scale: 1.5
 
 mode_controller_node:
   ros__parameters:
     start_mode: RACE
-    race_speed_cap_mps: 1.7
+    race_speed_cap_mps: 2.2
     learn_speed_cap_mps: 0.8
     race_entry_quality_threshold: 0.5
     auto_switch_learn_to_race: true
@@ -35,7 +36,7 @@ mode_controller_node:
 track_learner_node:
   ros__parameters:
     min_quality: 0.5
-    speed_profile_max_mps: 0.8
+    speed_profile_max_mps: 1.2
     speed_profile_curvature_gain: 0.6
     track_store_path: /home/amine/Desktop/covapsy/track/track_sim.json
     auto_save_on_valid: true

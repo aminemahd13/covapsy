@@ -321,10 +321,12 @@ source install/setup.bash
 ros2 launch covapsy_bringup sim_webots.launch.py mode:=race
 ```
 
+`mode:=race` now auto-selects the multi-car world (`Piste_CoVAPSy_2025a_multicar_ros2.wbt`) unless you override `world:=...`.
+
 Useful launch arguments:
 
 ```bash
-# Choose world
+# Choose world explicitly (overrides auto selection)
 ros2 launch covapsy_bringup sim_webots.launch.py \
 	mode:=race world:=Piste_CoVAPSy_2025a_multicar_ros2.wbt
 

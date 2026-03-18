@@ -11,6 +11,15 @@ def _bool_from_text(value: str) -> bool:
     return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
+def _resolve_world_name(mode: str, world_arg: str) -> str:
+    world = str(world_arg).strip()
+    if world and world.lower() not in ('auto', 'default'):
+        return world
+    if mode.lower() == 'race':
+        return 'Piste_CoVAPSy_2025a_multicar_ros2.wbt'
+    return 'Piste_CoVAPSy_2025a_ros2.wbt'
+
+
 def _sim_nodes_for_mode(cfg_path: str, mode: str):
     mode = mode.lower()
 
@@ -49,7 +58,8 @@ def _sim_nodes_for_mode(cfg_path: str, mode: str):
 def _build_runtime_actions(context):
     mode = LaunchConfiguration('mode').perform(context)
     project_root = LaunchConfiguration('project_root').perform(context)
-    world = LaunchConfiguration('world').perform(context)
+    world_arg = LaunchConfiguration('world').perform(context)
+    world = _resolve_world_name(mode, world_arg)
     webots_executable = LaunchConfiguration('webots_executable').perform(context)
     headless = _bool_from_text(LaunchConfiguration('headless').perform(context))
     startup_delay = float(LaunchConfiguration('startup_delay_sec').perform(context))
@@ -109,8 +119,8 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 'world',
-                default_value='Piste_CoVAPSy_2025a_ros2.wbt',
-                description='World filename from simulation/webots/worlds/.',
+                default_value='auto',
+                description='World filename from simulation/webots/worlds/ (auto picks multicar for race).',
             ),
             DeclareLaunchArgument(
                 'project_root',
