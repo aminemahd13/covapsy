@@ -22,6 +22,9 @@ class ModeControllerNode(Node):
         self.declare_parameter('race_speed_cap_mps', 1.5)
         self.declare_parameter('learn_speed_cap_mps', 0.7)
         self.declare_parameter('race_entry_quality_threshold', 0.75)
+        self.declare_parameter('race_entry_min_smoothness', 0.0)
+        self.declare_parameter('race_entry_max_spacing_stddev', 0.04)
+        self.declare_parameter('race_entry_max_closure_error_m', 0.35)
         self.declare_parameter('auto_switch_learn_to_race', True)
         self.declare_parameter('safety_steer_veto_clearance_m', 0.3)
         self.declare_parameter('race_obstacle_avoidance_enabled', True)
@@ -30,6 +33,8 @@ class ModeControllerNode(Node):
         self.declare_parameter('race_ttc_min_speed_mps', 0.25)
         self.declare_parameter('race_side_slowdown_clearance_m', 0.18)
         self.declare_parameter('race_side_critical_clearance_m', 0.11)
+        self.declare_parameter('race_overlay_steer_slew_rad_s', 4.0)
+        self.declare_parameter('race_overlay_speed_slew_mps2', 3.2)
         self.declare_parameter('odom_progress_window_s', 1.0)
         self.declare_parameter('odom_min_displacement_m', 0.02)
 
@@ -41,6 +46,9 @@ class ModeControllerNode(Node):
         self.race_speed_cap = float(self.get_parameter('race_speed_cap_mps').value)
         self.learn_speed_cap = float(self.get_parameter('learn_speed_cap_mps').value)
         self.race_entry_quality = float(self.get_parameter('race_entry_quality_threshold').value)
+        self.race_entry_min_smoothness = float(self.get_parameter('race_entry_min_smoothness').value)
+        self.race_entry_max_spacing_std = float(self.get_parameter('race_entry_max_spacing_stddev').value)
+        self.race_entry_max_closure = float(self.get_parameter('race_entry_max_closure_error_m').value)
         self.auto_switch_learn_to_race = bool(self.get_parameter('auto_switch_learn_to_race').value)
         self.safety_veto_clearance = float(self.get_parameter('safety_steer_veto_clearance_m').value)
         self.race_obstacle_avoid = bool(self.get_parameter('race_obstacle_avoidance_enabled').value)
@@ -49,6 +57,8 @@ class ModeControllerNode(Node):
         self.race_ttc_min_speed = float(self.get_parameter('race_ttc_min_speed_mps').value)
         self.race_side_slowdown_clearance = float(self.get_parameter('race_side_slowdown_clearance_m').value)
         self.race_side_critical_clearance = float(self.get_parameter('race_side_critical_clearance_m').value)
+        self.race_overlay_steer_slew = float(self.get_parameter('race_overlay_steer_slew_rad_s').value)
+        self.race_overlay_speed_slew = float(self.get_parameter('race_overlay_speed_slew_mps2').value)
         self.odom_window = float(self.get_parameter('odom_progress_window_s').value)
         self.odom_min_disp = float(self.get_parameter('odom_min_displacement_m').value)
 
@@ -58,6 +68,10 @@ class ModeControllerNode(Node):
         self.wrong_conf = 0.0
         self.track_learned = False
         self.track_quality = 0.0
+        self.track_quality_valid = False
+        self.track_closure_error_m = 999.0
+        self.track_smoothness = 0.0
+        self.track_spacing_stddev = 999.0
         self.last_scan = None
         self.wheel_speed = 0.0
         self.rear_obstacle = False
@@ -65,6 +79,10 @@ class ModeControllerNode(Node):
         self.last_imu = None
         self.last_recovery_trigger_reason = 'none'
         self.odom_history = []  # [(time_s, x, y)]
+        self.overlay_initialized = False
+        self.overlay_last_time = self.get_clock().now()
+        self.overlay_last_steer = 0.0
+        self.overlay_last_speed = 0.0
 
         self.recovery = RecoveryFSM(max_attempts=2, brake_steps=8, reverse_steps=15, reassess_steps=6)
 
@@ -106,6 +124,20 @@ class ModeControllerNode(Node):
 
     def quality_cb(self, msg: TrackQuality) -> None:
         self.track_quality = float(msg.score)
+        self.track_quality_valid = bool(msg.is_valid)
+        self.track_closure_error_m = float(msg.closure_error_m)
+        self.track_smoothness = float(msg.smoothness)
+        self.track_spacing_stddev = float(msg.spacing_stddev)
+
+    def _track_ready(self) -> bool:
+        return bool(
+            self.track_learned
+            and self.track_quality_valid
+            and self.track_quality >= self.race_entry_quality
+            and self.track_smoothness >= self.race_entry_min_smoothness
+            and self.track_spacing_stddev <= self.race_entry_max_spacing_std
+            and self.track_closure_error_m <= self.race_entry_max_closure
+        )
 
     def scan_cb(self, msg: LaserScan) -> None:
         self.last_scan = msg
@@ -200,7 +232,8 @@ class ModeControllerNode(Node):
 
     def _safety_overlay(self, nominal: DriveCommand, front_clear: float, left_clear: float, right_clear: float) -> DriveCommand:
         out = DriveCommand()
-        out.header.stamp = self.get_clock().now().to_msg()
+        now = self.get_clock().now()
+        out.header.stamp = now.to_msg()
         out.header.frame_id = 'base_link'
 
         out.steer_rad = nominal.steer_rad
@@ -249,10 +282,33 @@ class ModeControllerNode(Node):
         if front_clear < 0.12:
             out.speed_mps = 0.0
 
+        # Limit race-overlay output slew to avoid abrupt pursuit/reactive transitions.
+        critical_slowdown = front_clear < self.front_blocked_m
+        if not self.overlay_initialized:
+            self.overlay_initialized = True
+            self.overlay_last_time = now
+            self.overlay_last_steer = float(out.steer_rad)
+            self.overlay_last_speed = float(out.speed_mps)
+        elif critical_slowdown:
+            self.overlay_last_time = now
+            self.overlay_last_steer = float(out.steer_rad)
+            self.overlay_last_speed = float(out.speed_mps)
+        else:
+            dt = max(1e-3, (now - self.overlay_last_time).nanoseconds * 1e-9)
+            steer_step = max(0.0, self.race_overlay_steer_slew) * dt
+            speed_step = max(0.0, self.race_overlay_speed_slew) * dt
+            out.steer_rad = max(self.overlay_last_steer - steer_step, min(self.overlay_last_steer + steer_step, out.steer_rad))
+            out.speed_mps = max(self.overlay_last_speed - speed_step, min(self.overlay_last_speed + speed_step, out.speed_mps))
+            out.speed_mps = max(0.0, out.speed_mps)
+            self.overlay_last_time = now
+            self.overlay_last_steer = float(out.steer_rad)
+            self.overlay_last_speed = float(out.speed_mps)
+        out.speed_mps = min(out.speed_mps, self.race_speed_cap)
+
         return out
 
     def _mode_logic(self):
-        track_ready = self.track_learned and self.track_quality >= self.race_entry_quality
+        track_ready = self._track_ready()
 
         if self.mode == 'IDLE':
             if track_ready:
@@ -351,7 +407,7 @@ class ModeControllerNode(Node):
                 self.mode = 'STOPPED'
             if rec_cmd.stage == RecoveryStage.ESCALATE:
                 self.last_recovery_trigger_reason = rec_reason
-                if self.track_learned and self.track_quality >= self.race_entry_quality:
+                if self._track_ready():
                     self.mode = 'RACE'
                 else:
                     self.mode = 'LEARN'
@@ -365,6 +421,8 @@ class ModeControllerNode(Node):
 
         if self.mode != 'RECOVERY' and self._odom_making_progress():
             self.recovery.reset_runtime()
+        if self.mode != 'RACE':
+            self.overlay_initialized = False
 
         self.cmd_pub.publish(out)
 

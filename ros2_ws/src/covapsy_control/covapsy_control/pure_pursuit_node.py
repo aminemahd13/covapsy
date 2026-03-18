@@ -22,6 +22,11 @@ class PurePursuitNode(Node):
         self.declare_parameter('curvature_speed_gain', 0.9)
         self.declare_parameter('speed_hint_scale', 1.0)
         self.declare_parameter('speed_hint_influence', 1.0)
+        self.declare_parameter('lat_accel_limit_mps2', 2.6)
+        self.declare_parameter('speed_ttc_target_s', 1.1)
+        self.declare_parameter('speed_accel_limit_mps2', 1.6)
+        self.declare_parameter('speed_decel_limit_mps2', 3.0)
+        self.declare_parameter('curvature_window_pts', 8)
 
         self.wheelbase = float(self.get_parameter('wheelbase_m').value)
         self.lh_min = float(self.get_parameter('lookahead_min_m').value)
@@ -33,12 +38,18 @@ class PurePursuitNode(Node):
         self.curvature_gain = float(self.get_parameter('curvature_speed_gain').value)
         self.speed_hint_scale = float(self.get_parameter('speed_hint_scale').value)
         self.speed_hint_influence = float(self.get_parameter('speed_hint_influence').value)
+        self.lat_accel_limit = float(self.get_parameter('lat_accel_limit_mps2').value)
+        self.speed_ttc_target = float(self.get_parameter('speed_ttc_target_s').value)
+        self.speed_accel_limit = float(self.get_parameter('speed_accel_limit_mps2').value)
+        self.speed_decel_limit = float(self.get_parameter('speed_decel_limit_mps2').value)
+        self.curvature_window_pts = int(self.get_parameter('curvature_window_pts').value)
 
         self.path: List[Tuple[float, float]] = []
         self.path_speed_hints: List[float] = []
         self.last_scan = None
         self.last_steer = 0.0
         self.last_time = self.get_clock().now()
+        self.last_speed_cmd = 0.0
 
         self.path_sub = self.create_subscription(Path, '/track_path', self.path_cb, 5)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_cb, 20)
@@ -95,6 +106,38 @@ class PurePursuitNode(Node):
         hinted = self.path_speed_hints[i] * max(0.1, self.speed_hint_scale)
         return max(self.speed_min, min(self.speed_max, hinted))
 
+    @staticmethod
+    def _menger_curvature(a: Tuple[float, float], b: Tuple[float, float], c: Tuple[float, float]) -> float:
+        ax, ay = a
+        bx, by = b
+        cx, cy = c
+        ab = math.hypot(bx - ax, by - ay)
+        bc = math.hypot(cx - bx, cy - by)
+        ac = math.hypot(cx - ax, cy - ay)
+        if ab < 1e-6 or bc < 1e-6 or ac < 1e-6:
+            return 0.0
+        s = 0.5 * (ab + bc + ac)
+        area_sq = max(0.0, s * (s - ab) * (s - bc) * (s - ac))
+        if area_sq <= 1e-12:
+            return 0.0
+        return 4.0 * math.sqrt(area_sq) / max(1e-6, ab * bc * ac)
+
+    def _path_curvature_ahead(self, start_idx: int, window_pts: int) -> float:
+        if len(self.path) < 3:
+            return 0.0
+        n = len(self.path)
+        w = max(1, min(window_pts, n - 2))
+        k_max = 0.0
+        for j in range(w):
+            i = (start_idx + j) % n
+            p0 = self.path[(i - 1) % n]
+            p1 = self.path[i]
+            p2 = self.path[(i + 1) % n]
+            k = abs(self._menger_curvature(p0, p1, p2))
+            if k > k_max:
+                k_max = k
+        return k_max
+
     def _front_clearance(self) -> float:
         if self.last_scan is None or not self.last_scan.ranges:
             return 1.0
@@ -135,18 +178,36 @@ class PurePursuitNode(Node):
         max_step = self.steer_slew * dt
         steer = max(self.last_steer - max_step, min(self.last_steer + max_step, steer))
         self.last_steer = steer
-        self.last_time = now
 
         front_clear = self._front_clearance()
-        curvature_penalty = min(1.0, abs(curvature) / max(1e-3, self.curvature_gain))
-        base_speed = self.speed_max * (1.0 - 0.55 * curvature_penalty)
-        base_speed *= min(1.0, max(0.2, front_clear / 1.2))
+        path_curv = self._path_curvature_ahead(closest_i, self.curvature_window_pts)
+        kappa_for_speed = max(abs(curvature), path_curv)
+        kappa_effective = kappa_for_speed * max(0.1, self.curvature_gain)
+        if kappa_effective <= 1e-4:
+            v_curve = self.speed_max
+        else:
+            v_curve = math.sqrt(max(0.0, self.lat_accel_limit) / kappa_effective)
 
+        ttc_target = max(0.2, self.speed_ttc_target)
+        v_clear = self.speed_max
+        if min(v_curve, self.speed_max) > 0.05:
+            ttc_pred = front_clear / max(0.05, min(v_curve, self.speed_max))
+            if ttc_pred < ttc_target:
+                v_clear = front_clear / ttc_target
+
+        v_model = min(v_curve, v_clear, self.speed_max)
         hint_speed = self._speed_hint(closest_i)
         hint_influence = min(1.0, max(0.0, self.speed_hint_influence))
-        soft_hint_cap = base_speed + hint_influence * (hint_speed - base_speed)
-        speed = min(base_speed, soft_hint_cap)
+        v_hint_cap = min(v_model, hint_speed)
+        speed_target = (1.0 - hint_influence) * v_model + hint_influence * v_hint_cap
+
+        # Apply speed slew limits for smoother high-speed behavior.
+        accel_step = max(0.0, self.speed_accel_limit) * dt
+        decel_step = max(0.0, self.speed_decel_limit) * dt
+        speed = max(self.last_speed_cmd - decel_step, min(self.last_speed_cmd + accel_step, speed_target))
         speed = max(self.speed_min, min(self.speed_max, speed))
+        self.last_speed_cmd = speed
+        self.last_time = now
 
         cmd = DriveCommand()
         cmd.header.stamp = now.to_msg()
