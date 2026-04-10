@@ -67,12 +67,12 @@
 /*
  * Board-specific ADC instance for CAPT_IR_D (A2/PA3):
  * - NUCLEO-L432KC: hadc1
- * - NUCLEO-G431KB: hadc2
+ * - NUCLEO-G431KB (PA3/ADC1_IN4 baseline): hadc1
  */
 #if defined(STM32L432xx)
 #define FW_REAR_OBSTACLE_ADC_HANDLE hadc1
 #elif defined(STM32G431xx)
-#define FW_REAR_OBSTACLE_ADC_HANDLE hadc2
+#define FW_REAR_OBSTACLE_ADC_HANDLE hadc1
 #else
 #error "Unsupported STM32 target: define CAPT_IR_D ADC handle for this board."
 #endif

@@ -7,7 +7,7 @@ Adjust only if your hardware differs from `schematics/`.
 
 - Supported boards:
   - `NUCLEO-L432KC` (`STM32L432KCU6`)
-  - `NUCLEO-G431KB` (`STM32G431KBT6`)
+  - `NUCLEO-G431KB` (`STM32G431KBTx`, e.g. `KBT3` / `KBT6`)
 - Package: `LQFP32`
 - Baseline date: `2026-04-10`
 
