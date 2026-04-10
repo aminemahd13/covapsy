@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import math
 import os
+import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import rclpy
+import tf2_ros
 from covapsy_interfaces.msg import DirectionState, TrackQuality
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
+from rclpy.duration import Duration
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool
+
+# Import for tf2_ros.Buffer.transform() support on PoseStamped
+import tf2_geometry_msgs.tf2_geometry_msgs  # noqa: F401
 
 
 class TrackLearnerNode(Node):
@@ -43,6 +51,8 @@ class TrackLearnerNode(Node):
             self.track_store_path = os.path.abspath(os.path.expanduser(self.track_store_path))
         self.auto_save_on_valid = bool(self.get_parameter('auto_save_on_valid').value)
         self.freeze_after_valid = bool(self.get_parameter('freeze_after_valid').value)
+        self.declare_parameter('max_backups', 5)
+        self.max_backups = int(self.get_parameter('max_backups').value)
 
         self.last_scan = None
         self.last_dir = DirectionState.DIR_UNKNOWN
@@ -53,6 +63,10 @@ class TrackLearnerNode(Node):
         self.cached_track_quality: Optional[Dict[str, Any]] = None
         self._last_saved_signature = ''
         self.track_frozen = False
+
+        # TF listener for map-based persistence
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self.scan_sub = self.create_subscription(LaserScan, '/scan_filtered', self.scan_cb, 20)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_cb, 30)
@@ -191,6 +205,26 @@ class TrackLearnerNode(Node):
         quality.reason = str(data.get('reason', default_reason))
         return quality
 
+    def _transform_path(self, pts: List[Tuple[float, float]], from_frame: str, to_frame: str) -> Optional[List[Tuple[float, float]]]:
+        if from_frame == to_frame:
+            return pts
+        try:
+            # Wait a tiny bit for transform
+            self.tf_buffer.lookup_transform(to_frame, from_frame, rclpy.time.Time(), timeout=Duration(seconds=0.1))
+            transformed = []
+            for x, y in pts:
+                ps = PoseStamped()
+                ps.header.frame_id = from_frame
+                ps.pose.position.x = x
+                ps.pose.position.y = y
+                ps.pose.orientation.w = 1.0
+                ps_out = self.tf_buffer.transform(ps, to_frame)
+                transformed.append((ps_out.pose.position.x, ps_out.pose.position.y))
+            return transformed
+        except Exception as exc:
+            self.get_logger().warning(f'failed to transform path from {from_frame} to {to_frame}: {exc}')
+            return None
+
     def _cache_valid_track(self, pts: List[Tuple[float, float]], speeds: List[float], quality: TrackQuality) -> None:
         if not quality.is_valid:
             return
@@ -207,6 +241,8 @@ class TrackLearnerNode(Node):
         try:
             with open(self.track_store_path, 'r', encoding='utf-8') as f:
                 payload = json.load(f)
+            version = payload.get('version', 1)
+            frame_id = payload.get('frame_id', 'odom')
             points = payload.get('points', [])
             quality_data = payload.get('quality', {})
             pts: List[Tuple[float, float]] = []
@@ -218,13 +254,17 @@ class TrackLearnerNode(Node):
                 pts.append((px, py))
                 speeds.append(max(0.05, speed))
 
+            # If track was saved in map but we are in a session without a map (or different map),
+            # this might be tricky. For now, we load it as is and let the publisher handle the frame.
+            self._loaded_frame_id = frame_id
+
             quality = self._quality_from_dict(quality_data, default_reason='loaded_from_file')
             if len(pts) >= 3 and quality.is_valid:
                 self._cache_valid_track(pts, speeds, quality)
                 if self.freeze_after_valid:
                     self.track_frozen = True
                 self.get_logger().info(
-                    f'loaded cached track ({len(pts)} points, score={quality.score:.3f}) from {self.track_store_path}'
+                    f'loaded cached track v{version} ({len(pts)} points, score={quality.score:.3f}, frame={frame_id}) from {self.track_store_path}'
                 )
             else:
                 self.get_logger().warning(
@@ -237,16 +277,33 @@ class TrackLearnerNode(Node):
         if not self.track_store_path or not self.auto_save_on_valid or not quality.is_valid:
             return
 
+        # Try to save in 'map' frame if available, else fallback to 'odom'
+        target_frame = 'odom'
+        pts_to_save = pts
+        if self.tf_buffer.can_transform('map', 'odom', rclpy.time.Time(), timeout=Duration(seconds=0.1)):
+            transformed = self._transform_path(pts, 'odom', 'map')
+            if transformed:
+                target_frame = 'map'
+                pts_to_save = transformed
+
         signature = (
-            f'{len(pts)}|{quality.score:.4f}|'
-            f'{pts[0][0]:.3f},{pts[0][1]:.3f}|{pts[-1][0]:.3f},{pts[-1][1]:.3f}'
+            f'{len(pts_to_save)}|{quality.score:.4f}|'
+            f'{pts_to_save[0][0]:.3f},{pts_to_save[0][1]:.3f}|{pts_to_save[-1][0]:.3f},{pts_to_save[-1][1]:.3f}'
         )
         if signature == self._last_saved_signature:
             return
 
+        # Track ID for metadata
+        track_hash = hashlib.sha256(signature.encode()).hexdigest()[:8]
+
         payload = {
-            'version': 1,
-            'frame_id': 'odom',
+            'version': 2,
+            'frame_id': target_frame,
+            'metadata': {
+                'track_id': track_hash,
+                'created_at': datetime.utcnow().isoformat() + 'Z',
+                'closed_loop': True,  # Track learner extracts closed loops
+            },
             'sample_distance_m': float(self.sample_distance),
             'points': [
                 {
@@ -254,7 +311,7 @@ class TrackLearnerNode(Node):
                     'y': float(py),
                     'speed_mps': float(speeds[idx]) if idx < len(speeds) else float(self.speed_max),
                 }
-                for idx, (px, py) in enumerate(pts)
+                for idx, (px, py) in enumerate(pts_to_save)
             ],
             'quality': self._quality_to_dict(quality),
         }
@@ -263,11 +320,22 @@ class TrackLearnerNode(Node):
             folder = os.path.dirname(self.track_store_path)
             if folder:
                 os.makedirs(folder, exist_ok=True)
+
+            # Rotation/Backup before overwriting
+            if os.path.exists(self.track_store_path) and self.max_backups > 0:
+                for i in range(self.max_backups - 1, 0, -1):
+                    src = f'{self.track_store_path}.{i}'
+                    dst = f'{self.track_store_path}.{i+1}'
+                    if os.path.exists(src):
+                        os.replace(src, dst)
+                os.replace(self.track_store_path, f'{self.track_store_path}.1')
+
             tmp_path = f'{self.track_store_path}.tmp'
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(payload, f, indent=2)
             os.replace(tmp_path, self.track_store_path)
             self._last_saved_signature = signature
+            self.get_logger().info(f'saved track (frame={target_frame}, id={track_hash}) to {self.track_store_path}')
         except Exception as exc:
             self.get_logger().warning(f'failed to save track cache to {self.track_store_path}: {exc}')
 
@@ -275,10 +343,16 @@ class TrackLearnerNode(Node):
         learned = Bool()
         learned.data = bool(quality.is_valid)
 
+        # If it's a cached track from map, use map frame
+        frame_id = 'odom'
+        pts_to_pub = pts
+        if hasattr(self, '_loaded_frame_id') and self._loaded_frame_id == 'map' and pts == self.cached_track_pts:
+            frame_id = 'map'
+
         path = Path()
         path.header.stamp = quality.header.stamp
-        path.header.frame_id = 'odom'
-        for idx, (px, py) in enumerate(pts):
+        path.header.frame_id = frame_id
+        for idx, (px, py) in enumerate(pts_to_pub):
             ps = PoseStamped()
             ps.header = path.header
             ps.pose.position.x = float(px)

@@ -32,9 +32,10 @@ track_learner_node:
     min_quality: 0.78
     speed_profile_max_mps: 0.4
     speed_profile_curvature_gain: 0.7
-    track_store_path: /home/amine/Desktop/covapsy/track/track_real.json
+    track_store_path: "track/track_real.json"
     auto_save_on_valid: true
     freeze_after_valid: false
+    max_backups: 5
 
 stm32_bridge_node:
   ros__parameters:
