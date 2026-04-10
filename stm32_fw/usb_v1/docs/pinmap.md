@@ -1,13 +1,45 @@
-# Pin Map (USB v1 + NUCLEO-G431KB)
+# Pin Map (USB v1 + NUCLEO-L432KC / NUCLEO-G431KB)
 
-This document captures the baseline mapping used by `usb_v1` firmware.
-Adjust to your exact board/schematic before flashing.
+This document captures the schematic-validated mapping used by `usb_v1` firmware.
+Adjust only if your hardware differs from `schematics/`.
 
 ## Board Metadata
 
-- STM32 part number: `STM32G431KBT6` (board: `NUCLEO-G431KB`)
+- Supported boards:
+  - `NUCLEO-L432KC` (`STM32L432KCU6`)
+  - `NUCLEO-G431KB` (`STM32G431KBT6`)
 - Package: `LQFP32`
 - Baseline date: `2026-04-10`
+
+## Schematic to MCU Header Mapping
+
+The nets below come from:
+
+- `schematics/Hat_CoVASPSy_v1re2_Schema.pdf`
+- `schematics/Interface_CoVASPSy_v1re2_Schema.pdf`
+
+| Schematic Net | Hat Header Signal | Arduino Header Pin | MCU Pin (L432/G431) | Peripheral Role | Firmware Binding |
+|---|---|---|---|---|---|
+| `TX_MCU` | UART TX to bridge | `D1` | `PA9` | `USART1_TX` | `FW_USB_UART_HANDLE` |
+| `RX_MCU` | UART RX from bridge | `D0` | `PA10` | `USART1_RX` | `FW_USB_UART_HANDLE` |
+| `PROPULSION_MCU` | ESC PWM | `D9` | `PA8` | `TIM1_CH1` | `FW_PWM_PROP_CHANNEL` |
+| `SERVO_DIR_MCU` | Steering PWM | `D10` | `PA11` | `TIM1_CH4` | `FW_PWM_STEERING_CHANNEL` |
+| `FOURCHE` | Wheel speed input | `A0` | `PA0` | `TIM2_CH1` input capture | `FW_WHEEL_TIMER_CHANNEL` |
+| `CAPT_IR_D` | Rear obstacle input | `A2` | `PA3` | `ADC/GPIO threshold` | `FW_REAR_OBSTACLE_ADC_HANDLE` |
+
+## Required Jumper Positions (STM32 Control Mode)
+
+On `Hat_CoVASPSy_v1re2`, set:
+
+- `J_PROP`: `1-2` (`PROPULSION_MCU -> PWM_PROPULSION`)
+- `J_DIR`: `1-2` (`SERVO_DIR_MCU -> PWM_DIRECTION`)
+- `J_TX`: `2-3` (`TX_MCU -> TX_DIR`)
+- `J_RX`: `2-3` (`RX_MCU -> RX_DIR`)
+
+## Important Electrical Note
+
+- `PROPULSION_MCU` is routed to `D9` and also tied to `D8` through `R78` on the Hat schematic.
+- Keep `D8` un-driven (input/high-Z) in firmware to avoid output contention on the propulsion net.
 
 ## Clock / Debug
 

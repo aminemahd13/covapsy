@@ -32,6 +32,15 @@ Use `docs/pinmap.md` to configure:
 - GPIO/EXTI or ADC for rear obstacle input
 - timer input-capture or equivalent for wheel speed source
 
+### Board Target Selection Sanity Check
+
+Before building, confirm the Cube target and generated ADC instance match `fw_config.h`:
+
+- `NUCLEO-L432KC` target (`STM32L432xx`): `FW_REAR_OBSTACLE_ADC_HANDLE` expects `hadc1`
+- `NUCLEO-G431KB` target (`STM32G431xx`): `FW_REAR_OBSTACLE_ADC_HANDLE` expects `hadc2`
+
+If your Cube project generates different handle names, align `fw_config.h` before compiling.
+
 ## 4. Import Firmware Logic
 
 Copy files from `src/` into your project `Core/Src` and `Core/Inc`:

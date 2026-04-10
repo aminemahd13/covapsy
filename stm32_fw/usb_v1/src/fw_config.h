@@ -29,14 +29,20 @@
 #define FW_PWM_STEERING_CENTER 7.4f
 
 /*
- * Baseline STM32 peripheral bindings (NUCLEO-G431KB + USB serial transport).
+ * Baseline STM32 peripheral bindings (NUCLEO-L432KC / NUCLEO-G431KB).
  * These symbols are expected from Cube-generated HAL files.
+ *
+ * Net mapping from Hat schematic:
+ * - TX_MCU / RX_MCU -> D1 / D0 -> USART1
+ * - PROPULSION_MCU -> D9 -> TIM1_CH1
+ * - SERVO_DIR_MCU -> D10 -> TIM1_CH4
+ * - FOURCHE -> A0 -> TIM2_CH1
  */
-#define FW_USB_UART_HANDLE huart1
-#define FW_PWM_TIMER_HANDLE htim1
-#define FW_PWM_PROP_CHANNEL TIM_CHANNEL_1
-#define FW_PWM_STEERING_CHANNEL TIM_CHANNEL_4
-#define FW_WHEEL_TIMER_HANDLE htim2
+#define FW_USB_UART_HANDLE huart1          /* TX_MCU / RX_MCU */
+#define FW_PWM_TIMER_HANDLE htim1          /* PROPULSION_MCU / SERVO_DIR_MCU */
+#define FW_PWM_PROP_CHANNEL TIM_CHANNEL_1  /* PROPULSION_MCU */
+#define FW_PWM_STEERING_CHANNEL TIM_CHANNEL_4 /* SERVO_DIR_MCU */
+#define FW_WHEEL_TIMER_HANDLE htim2        /* FOURCHE */
 #define FW_WHEEL_TIMER_CHANNEL TIM_CHANNEL_1
 
 /*
@@ -55,7 +61,18 @@
  * - by default read through ADC and converted to boolean with threshold
  */
 #define FW_REAR_OBSTACLE_USE_ADC 1u
+/*
+ * Board-specific ADC instance for CAPT_IR_D (A2/PA3):
+ * - NUCLEO-L432KC: hadc1
+ * - NUCLEO-G431KB: hadc2
+ */
+#if defined(STM32L432xx)
+#define FW_REAR_OBSTACLE_ADC_HANDLE hadc1
+#elif defined(STM32G431xx)
 #define FW_REAR_OBSTACLE_ADC_HANDLE hadc2
+#else
+#error "Unsupported STM32 target: define CAPT_IR_D ADC handle for this board."
+#endif
 #define FW_REAR_OBSTACLE_ADC_THRESHOLD_RAW 2048u /* 12-bit ADC range: 0..4095 */
 #define FW_REAR_OBSTACLE_ACTIVE_HIGH 1u
 
