@@ -55,8 +55,8 @@ echo "[5/7] Creating udev rules..."
 RPLIDAR_SERIAL="${RPLIDAR_SERIAL:-}"
 WAVESHARE_SERIAL="${WAVESHARE_SERIAL:-}"
 WAVESHARE_VENDOR_ID="${WAVESHARE_VENDOR_ID:-1a86}"
-WAVESHARE_PRODUCT_ID="${WAVESHARE_PRODUCT_ID:-7523}"
-WAVESHARE_MODEL="${WAVESHARE_MODEL:-USB_Serial}"
+WAVESHARE_PRODUCT_ID="${WAVESHARE_PRODUCT_ID:-55d3}"
+WAVESHARE_MODEL="${WAVESHARE_MODEL:-USB_Single_Serial}"
 
 rplidar_serial_match=""
 if [ -n "$RPLIDAR_SERIAL" ]; then
@@ -68,14 +68,14 @@ if [ -n "$WAVESHARE_SERIAL" ]; then
   waveshare_serial_match=", ATTRS{serial}==\"$WAVESHARE_SERIAL\""
 fi
 
-# RPLidar (/dev/rplidar) - explicit VID/PID + product (+ optional serial)
+# RPLidar (/dev/rplidar) - match by VID/PID (+ optional serial)
 sudo tee /etc/udev/rules.d/99-rplidar.rules > /dev/null << EOF
-SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ENV{ID_MODEL}=="CP2102_USB_to_UART_Bridge_Controller"${rplidar_serial_match}, SYMLINK+="rplidar", MODE="0666"
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ENV{ID_VENDOR_ID}=="10c4", ENV{ID_MODEL_ID}=="ea60"${rplidar_serial_match}, SYMLINK+="rplidar", MODE="0666"
 EOF
 
-# Waveshare bus-servo adapter (/dev/waveshare_servo) - explicit VID/PID + product (+ optional serial)
+# Waveshare bus-servo adapter (/dev/waveshare_servo) - this adapter often enumerates as ttyACM* on Pi 5
 sudo tee /etc/udev/rules.d/99-waveshare-servo.rules > /dev/null << EOF
-SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ATTRS{idVendor}=="${WAVESHARE_VENDOR_ID}", ATTRS{idProduct}=="${WAVESHARE_PRODUCT_ID}", ENV{ID_MODEL}=="${WAVESHARE_MODEL}"${waveshare_serial_match}, SYMLINK+="waveshare_servo", MODE="0666"
+SUBSYSTEM=="tty", KERNEL=="ttyACM*", ENV{ID_VENDOR_ID}=="${WAVESHARE_VENDOR_ID}", ENV{ID_MODEL_ID}=="${WAVESHARE_PRODUCT_ID}"${waveshare_serial_match}, SYMLINK+="waveshare_servo", MODE="0666"
 EOF
 
 # STM32 USB serial symlink (/dev/stm32_mcu)
@@ -107,7 +107,7 @@ fi
 
 # -- Python dependencies --
 echo "[7/7] Installing Python dependencies..."
-pip3 install --user pyserial numpy rpi-hardware-pwm
+pip3 install --user --break-system-packages pyserial numpy rpi-hardware-pwm
 
 echo ""
 echo "=========================================="

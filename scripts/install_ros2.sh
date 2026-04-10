@@ -37,7 +37,6 @@ sudo apt install -y \
   ros-jazzy-rplidar-ros \
   ros-jazzy-realsense2-camera \
   ros-jazzy-dynamixel-sdk \
-  ros-jazzy-micro-ros-agent \
   ros-jazzy-tf2-ros \
   ros-jazzy-tf-transformations \
   ros-jazzy-robot-localization \
