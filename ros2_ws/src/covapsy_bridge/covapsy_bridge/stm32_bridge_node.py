@@ -9,6 +9,7 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, String
 
 from covapsy_bridge.usb_protocol import encode_command_line, parse_telemetry_line
+from covapsy_bridge.steering_policy import apply_external_steering_mode
 
 try:
     import serial
@@ -26,6 +27,7 @@ class STM32BridgeNode(Node):
         self.declare_parameter('watchdog_timeout_s', 0.3)
         self.declare_parameter('max_speed_mps', 2.0)
         self.declare_parameter('max_steer_rad', 0.42)
+        self.declare_parameter('external_steering_mode', False)
         self.declare_parameter('competition_mode', True)
         self.declare_parameter('require_start_signal', True)
         self.declare_parameter('allow_restart_after_stop', False)
@@ -37,6 +39,7 @@ class STM32BridgeNode(Node):
         self.watchdog_timeout = float(self.get_parameter('watchdog_timeout_s').value)
         self.max_speed = float(self.get_parameter('max_speed_mps').value)
         self.max_steer = float(self.get_parameter('max_steer_rad').value)
+        self.external_steering_mode = bool(self.get_parameter('external_steering_mode').value)
         self.competition_mode = bool(self.get_parameter('competition_mode').value)
         self.require_start_signal = bool(self.get_parameter('require_start_signal').value)
         self.allow_restart_after_stop = bool(self.get_parameter('allow_restart_after_stop').value)
@@ -109,6 +112,10 @@ class STM32BridgeNode(Node):
 
         cmd.speed_mps = max(-0.8, min(self.max_speed, self.last_cmd.speed_mps))
         cmd.steer_rad = max(-self.max_steer, min(self.max_steer, self.last_cmd.steer_rad))
+        cmd.steer_rad = apply_external_steering_mode(
+            steer_rad=float(cmd.steer_rad),
+            external_steering_mode=self.external_steering_mode,
+        )
         cmd.emergency_brake = bool(self.last_cmd.emergency_brake)
         return cmd, True, False
 

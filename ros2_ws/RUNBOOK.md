@@ -32,20 +32,41 @@ ros2 launch covapsy_bringup car_race.launch.py
 
 Note: `sim_webots.launch.py mode:=race` auto-selects `Piste_CoVAPSy_2025a_multicar_ros2.wbt` unless `world:=...` is provided.
 
-## STM32 USB Link Checks (Real Car)
+## Real-Car USB Link Checks
 
-Before launching real-car profiles, confirm the USB symlink exists:
+Before launching real-car profiles, confirm the USB symlinks exist:
 
 ```bash
 ls -l /dev/stm32_mcu
+ls -l /dev/rplidar
+ls -l /dev/waveshare_servo
 ```
 
-Bridge status values:
+STM32 bridge status values:
 
 - `USB_DISCONNECTED`: serial device missing or cannot be opened
 - `USB_TIMEOUT`: no telemetry received within timeout
 - `USB_PARSE_ERROR`: malformed telemetry received
 - `WAIT_START`, `WATCHDOG_BRAKE`, `RUN`: normal runtime states once USB link is healthy
+
+Steering bridge status values:
+
+- `USB_DISCONNECTED`: steering adapter port missing/unopenable
+- `DXL_NO_RESPONSE`: DYNAMIXEL ping/write failed (ID/baud/power/cabling)
+- `WAIT_START`, `WATCHDOG_BRAKE`, `OK`: normal runtime steering safety states
+
+Sensor topic checks:
+
+```bash
+ros2 topic echo /scan --once
+ros2 topic echo /camera/color/image_raw --once
+```
+
+Optional XL430 discovery:
+
+```bash
+python3 ~/Desktop/covapsy/scripts/scan_xl430.py --device /dev/waveshare_servo
+```
 
 ## sim_reactive Validation Commands
 

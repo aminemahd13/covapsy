@@ -20,6 +20,7 @@ setup(
     entry_points={
         'console_scripts': [
             'stm32_bridge_node = covapsy_bridge.stm32_bridge_node:main',
+            'dynamixel_steering_node = covapsy_bridge.dynamixel_steering_node:main',
         ]
     },
 )

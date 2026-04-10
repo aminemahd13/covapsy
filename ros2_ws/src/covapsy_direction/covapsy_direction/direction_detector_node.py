@@ -18,25 +18,31 @@ class DirectionDetectorNode(Node):
         self.declare_parameter('enter_wrong_threshold', 0.75)
         self.declare_parameter('exit_wrong_threshold', 0.45)
         self.declare_parameter('scan_wall_max_range_m', 1.0)
+        self.declare_parameter('image_topic', '/image_raw')
+        self.declare_parameter('scan_topic', '/scan_filtered')
 
         self.min_green_ratio = float(self.get_parameter('min_green_ratio').value)
         self.min_red_ratio = float(self.get_parameter('min_red_ratio').value)
         self.enter_wrong = float(self.get_parameter('enter_wrong_threshold').value)
         self.exit_wrong = float(self.get_parameter('exit_wrong_threshold').value)
         self.scan_wall_max_range_m = float(self.get_parameter('scan_wall_max_range_m').value)
+        self.image_topic = str(self.get_parameter('image_topic').value)
+        self.scan_topic = str(self.get_parameter('scan_topic').value)
 
         self.bridge = CvBridge()
         self.last_scan = None
         self.latched_wrong = False
 
-        self.image_sub = self.create_subscription(Image, '/image_raw', self.image_cb, 10)
-        self.scan_sub = self.create_subscription(LaserScan, '/scan_filtered', self.scan_cb, 20)
+        self.image_sub = self.create_subscription(Image, self.image_topic, self.image_cb, 10)
+        self.scan_sub = self.create_subscription(LaserScan, self.scan_topic, self.scan_cb, 20)
 
         self.wrong_pub = self.create_publisher(Bool, '/wrong_direction', 10)
         self.conf_pub = self.create_publisher(Float32, '/wrong_direction_confidence', 10)
         self.dir_pub = self.create_publisher(DirectionState, '/track_direction', 10)
 
-        self.get_logger().info('direction_detector_node ready')
+        self.get_logger().info(
+            f'direction_detector_node ready (image_topic={self.image_topic}, scan_topic={self.scan_topic})'
+        )
 
     def scan_cb(self, msg: LaserScan) -> None:
         self.last_scan = msg
