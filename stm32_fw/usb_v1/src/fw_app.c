@@ -25,6 +25,8 @@ void FwApp_Init(fw_app_t *app, uint32_t now_ms)
     app->last_command_ms = now_ms;
     app->last_rx_seq = 0u;
     app->command_received = false;
+    (void)memset(&app->last_lcd_frame, 0, sizeof(app->last_lcd_frame));
+    app->lcd_received = false;
 }
 
 bool FwApp_OnCommandLine(
@@ -33,20 +35,43 @@ bool FwApp_OnCommandLine(
     uint32_t now_ms)
 {
     fw_drive_command_t decoded;
+    fw_lcd_frame_t decoded_lcd;
     if (app == 0)
     {
         return false;
     }
 
-    if (!FwProtocol_ParseCommandLine(rx_line, &decoded))
+    if (FwProtocol_ParseCommandLine(rx_line, &decoded))
+    {
+        app->last_command = decoded;
+        app->last_rx_seq = decoded.seq;
+        app->last_command_ms = now_ms;
+        app->command_received = true;
+        return true;
+    }
+
+    if (!FwProtocol_ParseLcdLine(rx_line, &decoded_lcd))
     {
         return false;
     }
 
-    app->last_command = decoded;
-    app->last_rx_seq = decoded.seq;
-    app->last_command_ms = now_ms;
-    app->command_received = true;
+    if (!app->lcd_received || decoded_lcd.seq >= app->last_lcd_frame.seq)
+    {
+        app->last_lcd_frame = decoded_lcd;
+        app->lcd_received = true;
+    }
+    return true;
+}
+
+bool FwApp_GetLatestLcdFrame(
+    const fw_app_t *app,
+    fw_lcd_frame_t *out_frame)
+{
+    if (app == 0 || out_frame == 0 || !app->lcd_received)
+    {
+        return false;
+    }
+    *out_frame = app->last_lcd_frame;
     return true;
 }
 

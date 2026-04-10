@@ -9,7 +9,7 @@ This contract matches the current ROS bridge implementation in:
 - Physical link: USB serial (CDC ACM or USB-UART path)
 - Encoding: ASCII CSV, newline-terminated (`\n`)
 - Pi acts as command source; STM32 enforces low-level safety
-- Target cadence: 50 Hz command + 50 Hz telemetry
+- Target cadence: 50 Hz command + 5 Hz LCD status + 50 Hz telemetry
 
 ## Command Line (Pi -> STM32)
 
@@ -31,6 +31,26 @@ Firmware behavior:
 - enforces neutral output if `run_enable=0`
 - enforces neutral output if `ebrake=1`
 
+## LCD Status Line (Pi -> STM32)
+
+Format:
+
+`LCD,<seq>,<l1>|<l2>|<l3>|<l4>`
+
+Fields:
+
+- `seq`: monotonically increasing display sequence
+- `l1..l4`: text lines for a `4x16` character view
+  - exactly four segments separated by `|`
+  - each segment max `16` printable ASCII characters
+  - commas are forbidden in LCD payload
+
+Firmware behavior:
+
+- stores the latest valid LCD frame by sequence
+- ignores stale/out-of-order LCD frames
+- rendering failure does not affect motion control path
+
 ## Telemetry Line (STM32 -> Pi)
 
 Format:
@@ -51,6 +71,9 @@ Fields:
 ## Validation Rules
 
 - command line must contain exactly 6 CSV tokens and start with `CMD`
+- LCD line must contain exactly 3 CSV tokens and start with `LCD`
+- LCD payload must contain exactly 4 pipe-separated segments (`l1|l2|l3|l4`)
+- each LCD segment must be <=16 printable ASCII chars
 - telemetry line must contain exactly 5 CSV tokens and start with `TEL`
 - malformed lines are ignored; watchdog/race-safety behavior still applies
 - command loss beyond watchdog timeout must force neutral output

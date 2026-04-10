@@ -13,6 +13,7 @@ bridge compatibility impact.
 Protocol-related items include:
 
 - command line shape (`CMD,...` fields)
+- LCD status line shape (`LCD,...` fields)
 - telemetry line shape (`TEL,...` fields)
 - run/ebrake semantics
 - steering/speed ranges
@@ -20,8 +21,9 @@ Protocol-related items include:
 
 ## Current
 
-- `FW_PROTOCOL_VERSION = "2.0.0"`
+- `FW_PROTOCOL_VERSION = "2.1.0"`
 - Bridge compatibility target:
   - command: `CMD,<seq>,<steer_deg>,<speed_mps>,<run_enable>,<ebrake>`
+  - LCD status: `LCD,<seq>,<l1>|<l2>|<l3>|<l4>`
   - telemetry: `TEL,<seq>,<wheel_mps>,<rear_obstacle>,<status_code>`
   - serial default: `115200` baud

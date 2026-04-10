@@ -11,13 +11,17 @@ int main(void)
     fw_app_t app;
     char rx_line[FW_PROTOCOL_LINE_MAX] = {0};
     char tx_line[FW_PROTOCOL_LINE_MAX] = {0};
+    fw_lcd_frame_t lcd_frame;
     fw_pwm_output_t pwm = {FW_PWM_PROP_STOP, FW_PWM_STEERING_CENTER};
     fw_telemetry_t telemetry = {0.0f, false, 0u};
     bool watchdog_forced_stop = false;
+    bool lcd_seq_valid = false;
     uint32_t now_ms;
     uint32_t last_tx_ms;
+    uint32_t last_lcd_seq = 0u;
 
     Board_Init();
+    Board_OledInit();
     now_ms = Board_Millis();
     last_tx_ms = now_ms;
     FwApp_Init(&app, now_ms);
@@ -50,6 +54,16 @@ int main(void)
         {
             Board_UsbWriteLine(tx_line);
             last_tx_ms = now_ms;
+        }
+
+        if (Board_OledIsReady() && FwApp_GetLatestLcdFrame(&app, &lcd_frame))
+        {
+            if (!lcd_seq_valid || lcd_frame.seq != last_lcd_seq)
+            {
+                Board_OledRenderLines(lcd_frame.lines);
+                last_lcd_seq = lcd_frame.seq;
+                lcd_seq_valid = true;
+            }
         }
 
         if (watchdog_forced_stop)

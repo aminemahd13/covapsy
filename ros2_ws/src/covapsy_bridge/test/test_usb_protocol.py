@@ -1,4 +1,10 @@
-from covapsy_bridge.usb_protocol import encode_command_line, parse_telemetry_line, parse_wire_bool
+from covapsy_bridge.usb_protocol import (
+    encode_command_line,
+    encode_lcd_line,
+    parse_telemetry_line,
+    parse_wire_bool,
+    sanitize_lcd_cell,
+)
 
 
 def test_encode_command_line_shape():
@@ -44,6 +50,25 @@ def test_parse_telemetry_line_rejects_invalid_bool():
 def test_parse_telemetry_line_rejects_non_finite_speed():
     try:
         parse_telemetry_line('TEL,1,nan,1,0')
+        assert False, 'expected ValueError'
+    except ValueError:
+        pass
+
+
+def test_sanitize_lcd_cell_and_encode_lcd_line():
+    assert sanitize_lcd_cell('abC,|z') == 'ABC//Z'
+    assert sanitize_lcd_cell('12345678901234567890') == '1234567890123456'
+
+    line = encode_lcd_line(
+        seq=9,
+        lines=['Mode race', 'usb,ok', 'bad|char', '12345678901234567890'],
+    )
+    assert line == 'LCD,9,MODE RACE|USB/OK|BAD/CHAR|1234567890123456\n'
+
+
+def test_encode_lcd_line_requires_four_lines():
+    try:
+        encode_lcd_line(seq=1, lines=['a', 'b', 'c'])
         assert False, 'expected ValueError'
     except ValueError:
         pass

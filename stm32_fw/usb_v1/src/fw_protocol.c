@@ -146,6 +146,86 @@ bool FwProtocol_ParseCommandLine(
     return true;
 }
 
+bool FwProtocol_ParseLcdLine(
+    const char *line,
+    fw_lcd_frame_t *out_lcd)
+{
+    char local[FW_PROTOCOL_LINE_MAX];
+    char *token = 0;
+    char *tokens[3] = {0};
+    uint8_t token_count = 0u;
+    uint32_t seq = 0u;
+    const char *payload = 0;
+    uint8_t row = 0u;
+
+    if (line == 0 || out_lcd == 0)
+    {
+        return false;
+    }
+
+    (void)memset(out_lcd, 0, sizeof(*out_lcd));
+
+    strncpy(local, line, sizeof(local) - 1u);
+    local[sizeof(local) - 1u] = '\0';
+
+    token = strtok(local, ",");
+    while (token != 0 && token_count < 3u)
+    {
+        tokens[token_count++] = token;
+        token = strtok(0, ",");
+    }
+    if (token_count != 3u || token != 0)
+    {
+        return false;
+    }
+    if (strcmp(tokens[0], "LCD") != 0)
+    {
+        return false;
+    }
+    if (!parse_u32_token(tokens[1], &seq))
+    {
+        return false;
+    }
+
+    payload = tokens[2];
+    for (row = 0u; row < FW_LCD_LINE_COUNT; ++row)
+    {
+        uint8_t col = 0u;
+        while (*payload != '\0' && *payload != '|')
+        {
+            uint8_t ch = (uint8_t)*payload;
+            if (ch < 32u || ch > 126u || ch == ',')
+            {
+                return false;
+            }
+            if (col >= FW_LCD_LINE_CHARS)
+            {
+                return false;
+            }
+            out_lcd->lines[row][col++] = (char)ch;
+            payload++;
+        }
+        out_lcd->lines[row][col] = '\0';
+
+        if (row < (FW_LCD_LINE_COUNT - 1u))
+        {
+            if (*payload != '|')
+            {
+                return false;
+            }
+            payload++;
+        }
+    }
+
+    if (*payload != '\0')
+    {
+        return false;
+    }
+
+    out_lcd->seq = seq;
+    return true;
+}
+
 bool FwProtocol_FormatTelemetryLine(
     const fw_telemetry_t *telemetry,
     uint32_t seq,

@@ -22,6 +22,12 @@ typedef struct
     uint8_t flags;
 } fw_telemetry_t;
 
+typedef struct
+{
+    uint32_t seq;
+    char lines[FW_LCD_LINE_COUNT][FW_LCD_LINE_CHARS + 1u];
+} fw_lcd_frame_t;
+
 bool FwProtocol_ParseCommandLine(
     const char *line,
     fw_drive_command_t *out_cmd);
@@ -32,5 +38,9 @@ bool FwProtocol_FormatTelemetryLine(
     int32_t status_code,
     char *out_line,
     uint32_t out_line_size);
+
+bool FwProtocol_ParseLcdLine(
+    const char *line,
+    fw_lcd_frame_t *out_lcd);
 
 #endif /* FW_PROTOCOL_H */

@@ -2,12 +2,17 @@
 
 #include <string.h>
 
+#include "fw_oled.h"
 #include "main.h"
 #include "tim.h"
 #include "usart.h"
 
 #if FW_REAR_OBSTACLE_USE_ADC
 #include "adc.h"
+#endif
+
+#if FW_OLED_ENABLE
+#include "i2c.h"
 #endif
 
 #if FW_LOG_USE_UART
@@ -25,6 +30,11 @@ static uint32_t s_usb_rx_len = 0u;
 static volatile float s_wheel_speed_m_s = 0.0f;
 static uint32_t s_wheel_last_capture = 0u;
 static bool s_wheel_capture_initialized = false;
+
+#if FW_OLED_ENABLE
+static fw_oled_t s_oled;
+static bool s_oled_initialized = false;
+#endif
 
 static float clampf(float value, float min_v, float max_v)
 {
@@ -183,6 +193,76 @@ void Board_SetSteeringDuty(float duty_percent)
         &FW_PWM_TIMER_HANDLE,
         FW_PWM_STEERING_CHANNEL,
         Board_DutyPercentToCompare(duty_percent));
+}
+
+#if FW_OLED_ENABLE
+static bool Board_OledI2cWrite(
+    uint8_t address_7bit,
+    const uint8_t *bytes,
+    uint16_t size,
+    void *user_data)
+{
+    (void)user_data;
+    if (bytes == 0 || size == 0u)
+    {
+        return false;
+    }
+    return HAL_I2C_Master_Transmit(
+               &FW_OLED_I2C_HANDLE,
+               (uint16_t)(address_7bit << 1),
+               (uint8_t *)bytes,
+               size,
+               FW_OLED_I2C_TIMEOUT_MS) == HAL_OK;
+}
+#endif
+
+void Board_OledInit(void)
+{
+#if FW_OLED_ENABLE
+    static const uint8_t addresses[] = {0x3Cu, 0x3Du};
+    FwOled_InitState(&s_oled, Board_OledI2cWrite, 0);
+    if (!FwOled_ProbeAndInit(&s_oled, addresses, (uint8_t)sizeof(addresses)))
+    {
+        s_oled.ready = false;
+        Board_Log("oled:not_found");
+    }
+    else
+    {
+        Board_Log("oled:ready");
+    }
+    s_oled_initialized = true;
+#endif
+}
+
+bool Board_OledIsReady(void)
+{
+#if FW_OLED_ENABLE
+    return s_oled_initialized && s_oled.ready;
+#else
+    return false;
+#endif
+}
+
+void Board_OledRenderLines(
+    const char lines[FW_LCD_LINE_COUNT][FW_LCD_LINE_CHARS + 1u])
+{
+#if FW_OLED_ENABLE
+    if (!s_oled_initialized)
+    {
+        Board_OledInit();
+    }
+    if (!s_oled.ready)
+    {
+        return;
+    }
+    if (!FwOled_RenderLines(&s_oled, lines))
+    {
+        s_oled.ready = false;
+        Board_Log("oled:write_fail");
+    }
+#else
+    (void)lines;
+#endif
 }
 
 float Board_ReadWheelSpeedMps(void)

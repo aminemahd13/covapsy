@@ -359,7 +359,7 @@ What is included:
 
 Key behaviors documented in firmware workspace:
 
-- USB serial CSV protocol (`CMD,...` / `TEL,...` newline-terminated)
+- USB serial CSV protocol (`CMD,...` + `LCD,...` from Pi, `TEL,...` from STM32)
 - watchdog neutral after timeout
 - steering/speed PWM mapping
 - telemetry line (`wheel_speed`, `rear_obstacle`)

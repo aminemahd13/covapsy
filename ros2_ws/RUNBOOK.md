@@ -49,6 +49,12 @@ STM32 bridge status values:
 - `USB_PARSE_ERROR`: malformed telemetry received
 - `WAIT_START`, `WATCHDOG_BRAKE`, `RUN`: normal runtime states once USB link is healthy
 
+STM32 OLED status relay:
+
+- Bridge sends low-rate `LCD` frames over USB to STM32 (`LCD,<seq>,l1|l2|l3|l4`).
+- Missing OLED or OLED I2C probe failure is non-fatal; motion control remains active.
+- If display content looks stale, verify `/car_mode`, `/race_telemetry`, `/recovery_state`, `/steering_status` are updating.
+
 Steering bridge status values:
 
 - `USB_DISCONNECTED`: steering adapter port missing/unopenable

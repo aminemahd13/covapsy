@@ -134,11 +134,16 @@ ros2_ws/
   - sub: /cmd_drive (covapsy_interfaces/msg/DriveCommand)
   - sub: /race_start (std_msgs/msg/Bool)
   - sub: /race_stop (std_msgs/msg/Bool)
+  - sub: /car_mode (std_msgs/msg/String)
+  - sub: /race_telemetry (covapsy_interfaces/msg/RaceTelemetry)
+  - sub: /recovery_state (covapsy_interfaces/msg/RecoveryState)
+  - sub: /steering_status (std_msgs/msg/String)
   - pub: /wheel_speed (std_msgs/msg/Float32)
   - pub: /rear_obstacle (std_msgs/msg/Bool)
   - pub: /bridge_status (std_msgs/msg/String)
   - pub: /stm32/cmd_drive (covapsy_interfaces/msg/DriveCommand)
-  - runtime: USB serial transport to STM32 (`/dev/stm32_mcu`, 115200, CSV `CMD`/`TEL` lines)
+  - runtime: USB serial transport to STM32 (`/dev/stm32_mcu`, 115200, CSV `CMD`/`LCD` out + `TEL` in)
+  - LCD bridge: builds a 4x16 operations status page and sends `LCD,<seq>,l1|l2|l3|l4` at low rate
   - supports `external_steering_mode=true` for real-car split actuation
 
 - dynamixel_steering_node
@@ -156,9 +161,9 @@ ros2_ws/
 - race_sim.yaml
   - RACE defaults for Webots with pursuit nominal + safety overlay.
 - learn_real.yaml
-  - conservative LEARN defaults for hardware.
+  - conservative LEARN defaults for hardware (includes STM32 OLED relay params).
 - race_real.yaml
-  - conservative RACE defaults for hardware.
+  - conservative RACE defaults for hardware (includes STM32 OLED relay params).
 
 Behavior is centralized in these files, not launch arguments.
 

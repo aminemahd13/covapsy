@@ -13,6 +13,8 @@ typedef struct
     uint32_t last_command_ms;
     uint32_t last_rx_seq;
     bool command_received;
+    fw_lcd_frame_t last_lcd_frame;
+    bool lcd_received;
 } fw_app_t;
 
 void FwApp_Init(fw_app_t *app, uint32_t now_ms);
@@ -21,6 +23,10 @@ bool FwApp_OnCommandLine(
     fw_app_t *app,
     const char *rx_line,
     uint32_t now_ms);
+
+bool FwApp_GetLatestLcdFrame(
+    const fw_app_t *app,
+    fw_lcd_frame_t *out_frame);
 
 void FwApp_BuildOutputs(
     fw_app_t *app,

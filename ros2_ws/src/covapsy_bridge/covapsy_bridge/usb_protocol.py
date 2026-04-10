@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import math
-from typing import Tuple
+from typing import Sequence, Tuple
+
+LCD_LINE_COUNT = 4
+LCD_LINE_CHARS = 16
 
 
 def bool_to_wire(value: bool) -> str:
@@ -28,6 +31,31 @@ def encode_command_line(
         f'CMD,{int(seq)},{float(steer_deg):.3f},{float(speed_mps):.3f},'
         f'{bool_to_wire(run_enable)},{bool_to_wire(emergency_brake)}\n'
     )
+
+
+def sanitize_lcd_cell(text: str, max_chars: int = LCD_LINE_CHARS) -> str:
+    raw = str(text or '').upper()
+    cleaned = []
+    for ch in raw:
+        code = ord(ch)
+        if code < 32 or code > 126:
+            cleaned.append(' ')
+            continue
+        if ch in {',', '|'}:
+            cleaned.append('/')
+            continue
+        cleaned.append(ch)
+    return ''.join(cleaned)[:max_chars]
+
+
+def encode_lcd_line(*, seq: int, lines: Sequence[str]) -> str:
+    if len(lines) != LCD_LINE_COUNT:
+        raise ValueError(f'lines must contain exactly {LCD_LINE_COUNT} entries')
+    payload = '|'.join(
+        sanitize_lcd_cell(line, max_chars=LCD_LINE_CHARS)
+        for line in lines
+    )
+    return f'LCD,{int(seq)},{payload}\n'
 
 
 def parse_telemetry_line(line: str) -> Tuple[int, float, bool, int]:

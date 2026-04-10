@@ -22,6 +22,11 @@ void Board_UsbWriteLine(const char *line);
 void Board_SetPropulsionDuty(float duty_percent);
 void Board_SetSteeringDuty(float duty_percent);
 
+void Board_OledInit(void);
+bool Board_OledIsReady(void);
+void Board_OledRenderLines(
+    const char lines[FW_LCD_LINE_COUNT][FW_LCD_LINE_CHARS + 1u]);
+
 float Board_ReadWheelSpeedMps(void);
 bool Board_ReadRearObstacle(void);
 

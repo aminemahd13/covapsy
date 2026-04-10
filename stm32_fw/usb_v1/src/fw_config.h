@@ -2,9 +2,12 @@
 #define FW_CONFIG_H
 
 /* Protocol version must be copied into release notes for compatibility tracking. */
-#define FW_PROTOCOL_VERSION "2.0.0"
+#define FW_PROTOCOL_VERSION "2.1.0"
 
 #define FW_PROTOCOL_LINE_MAX 96u
+
+#define FW_LCD_LINE_COUNT 4u
+#define FW_LCD_LINE_CHARS 16u
 
 /* Command flags (Pi -> STM32). */
 #define FW_CMD_FLAG_RUN_ENABLE 0x01u
@@ -79,5 +82,13 @@
 /* Optional logging (set to 1 if UART is configured and desired). */
 #define FW_LOG_USE_UART 0u
 #define FW_LOG_UART_HANDLE huart1
+
+/*
+ * OLED text display (mezzanine OLED1) over STM32 I2C.
+ * Set FW_OLED_ENABLE to 0 if OLED is not present on your board.
+ */
+#define FW_OLED_ENABLE 1u
+#define FW_OLED_I2C_HANDLE hi2c1
+#define FW_OLED_I2C_TIMEOUT_MS 5u
 
 #endif /* FW_CONFIG_H */
