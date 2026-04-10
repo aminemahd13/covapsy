@@ -41,9 +41,10 @@ track_learner_node:
     max_path_length_m: 180.0
     speed_profile_max_mps: 0.6       # conservative max for learned path
     speed_profile_curvature_gain: 0.7 # curvature speed penalty
-    track_store_path: /home/amine/Desktop/covapsy/track/track_sim.json
+    track_store_path: "track/track_sim.json"
     auto_save_on_valid: true
     freeze_after_valid: false
+    max_backups: 5
 
 direction_detector_node:
   ros__parameters:
