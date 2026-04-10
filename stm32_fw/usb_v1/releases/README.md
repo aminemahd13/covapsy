@@ -2,8 +2,8 @@
 
 Store built artifacts and release notes by version:
 
-- `releases/vX.Y.Z/hat_v1.elf`
-- `releases/vX.Y.Z/hat_v1.bin`
+- `releases/vX.Y.Z/usb_v1.elf`
+- `releases/vX.Y.Z/usb_v1.bin`
 - `releases/vX.Y.Z/RELEASE_NOTES.md`
 
 Minimum release note content:

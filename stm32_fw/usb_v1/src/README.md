@@ -5,11 +5,11 @@ These files implement protocol and control logic independent from STM32 HAL deta
 ## Files
 
 - `fw_config.h`: protocol and calibration constants
-- `fw_protocol.h/.c`: frame decode/encode and checksum
+- `fw_protocol.h/.c`: CSV command parsing and telemetry line formatting
 - `control_mapping.h/.c`: steering/speed to PWM mapping
 - `fw_app.h/.c`: watchdog and loop-level application state
 - `board_if.h`: hardware abstraction interface
-- `board_port_template.c`: baseline HAL port (SPI3 + TIM1 PWM + TIM2 wheel speed + rear obstacle); adjust for your Cube project
+- `board_port_template.c`: baseline HAL port (UART-backed USB + TIM1 PWM + TIM2 wheel speed + rear obstacle); adjust for your Cube project
 - `main.c`: reference main loop showing integration order
 
 ## Porting Flow

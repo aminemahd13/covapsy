@@ -3,8 +3,8 @@
 #include <string.h>
 
 #include "main.h"
-#include "spi.h"
 #include "tim.h"
+#include "usart.h"
 
 #if FW_REAR_OBSTACLE_USE_ADC
 #include "adc.h"
@@ -15,12 +15,12 @@
 #endif
 
 /*
- * Baseline board port for HAT v1re2 + NUCLEO-G431KB.
+ * Baseline board port for NUCLEO-G431KB using USB serial command transport.
  * Adapt handles/channels in fw_config.h if your Cube project differs.
  */
 
-static uint8_t s_spi_tx_frame[FW_PROTOCOL_FRAME_SIZE] = {
-    FW_PROTOCOL_HEADER0, FW_PROTOCOL_HEADER1, 127u, 127u, 0u, 0u};
+static char s_usb_rx_accum[FW_PROTOCOL_LINE_MAX] = {0};
+static uint32_t s_usb_rx_len = 0u;
 
 static volatile float s_wheel_speed_m_s = 0.0f;
 static uint32_t s_wheel_last_capture = 0u;
@@ -97,32 +97,76 @@ void Board_DelayMs(uint32_t delay_ms)
     HAL_Delay(delay_ms);
 }
 
-bool Board_SpiReadFrame(uint8_t out_frame[FW_PROTOCOL_FRAME_SIZE])
+bool Board_UsbReadLine(char *out_line, uint32_t out_line_size)
 {
-    HAL_StatusTypeDef status;
+    uint8_t rx_byte;
 
-    if (out_frame == 0)
+    if (out_line == 0 || out_line_size == 0u)
     {
         return false;
     }
 
-    status = HAL_SPI_TransmitReceive(
-        &FW_SPI_HANDLE,
-        s_spi_tx_frame,
-        out_frame,
-        FW_PROTOCOL_FRAME_SIZE,
-        1u);
+    while (HAL_UART_Receive(&FW_USB_UART_HANDLE, &rx_byte, 1u, 0u) == HAL_OK)
+    {
+        if (rx_byte == '\r')
+        {
+            continue;
+        }
 
-    return status == HAL_OK;
+        if (rx_byte == '\n')
+        {
+            uint32_t copy_len;
+            if (s_usb_rx_len == 0u)
+            {
+                continue;
+            }
+
+            copy_len = s_usb_rx_len;
+            if (copy_len >= out_line_size)
+            {
+                copy_len = out_line_size - 1u;
+            }
+
+            (void)memcpy(out_line, s_usb_rx_accum, copy_len);
+            out_line[copy_len] = '\0';
+            s_usb_rx_len = 0u;
+            return true;
+        }
+
+        if (s_usb_rx_len < (FW_PROTOCOL_LINE_MAX - 1u))
+        {
+            s_usb_rx_accum[s_usb_rx_len++] = (char)rx_byte;
+        }
+        else
+        {
+            /* Overflow: drop partial line and wait for next newline. */
+            s_usb_rx_len = 0u;
+        }
+    }
+
+    return false;
 }
 
-void Board_SpiSetReplyFrame(const uint8_t frame[FW_PROTOCOL_FRAME_SIZE])
+void Board_UsbWriteLine(const char *line)
 {
-    if (frame == 0)
+    size_t len;
+
+    if (line == 0)
     {
         return;
     }
-    (void)memcpy(s_spi_tx_frame, frame, FW_PROTOCOL_FRAME_SIZE);
+
+    len = strlen(line);
+    if (len == 0u)
+    {
+        return;
+    }
+
+    (void)HAL_UART_Transmit(
+        &FW_USB_UART_HANDLE,
+        (uint8_t *)line,
+        (uint16_t)len,
+        2u);
 }
 
 void Board_SetPropulsionDuty(float duty_percent)

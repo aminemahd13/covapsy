@@ -4,7 +4,7 @@ End-to-end repository for a CoVAPSy-style autonomous 1/10 car stack:
 
 - ROS2 Jazzy autonomy pipeline (reactive, learning, race, recovery)
 - Webots simulation assets and controllers
-- STM32 HAT firmware workspace (protocol + control mapping)
+- STM32 USB firmware workspace (protocol + control mapping)
 - Deployment and setup scripts for Raspberry Pi 5
 
 The repository is organized so you can develop in simulation, run the ROS graph on Linux/Pi, and integrate with STM32 firmware for real-car operation.
@@ -66,7 +66,7 @@ Core command chain:
 - `ros2_ws/src/covapsy_bridge/`: STM32 bridge node
 - `ros2_ws/src/covapsy_tools/`: telemetry logger and parameter checker
 - `simulation/webots/`: worlds, protos, and controllers
-- `stm32_fw/hat_v1/`: firmware source, protocol docs, flashing/integration runbooks
+- `stm32_fw/usb_v1/`: firmware source, protocol docs, flashing/integration runbooks
 - `scripts/`: setup, install, deployment, and utility scripts
 - `rules.md`: CoVAPSy rule summary and constraints reference
 
@@ -348,7 +348,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_webots_standalone.ps1
 
 ## STM32 Firmware
 
-Firmware workspace: `stm32_fw/hat_v1/`
+Firmware workspace: `stm32_fw/usb_v1/`
 
 What is included:
 
@@ -359,18 +359,18 @@ What is included:
 
 Key behaviors documented in firmware workspace:
 
-- SPI slave 6-byte frame protocol (`0x55 0x55` header)
+- USB serial CSV protocol (`CMD,...` / `TEL,...` newline-terminated)
 - watchdog neutral after timeout
 - steering/speed PWM mapping
-- telemetry frame (`wheel_speed`, `rear_obstacle`)
+- telemetry line (`wheel_speed`, `rear_obstacle`)
 
 Start with:
 
-- `stm32_fw/hat_v1/docs/pinmap.md`
-- `stm32_fw/hat_v1/docs/windows_cubeide_setup.md`
-- `stm32_fw/hat_v1/docs/flashing_swd_dfu.md`
-- `stm32_fw/hat_v1/docs/bench_validation.md`
-- `stm32_fw/hat_v1/docs/pi_integration.md`
+- `stm32_fw/usb_v1/docs/pinmap.md`
+- `stm32_fw/usb_v1/docs/windows_cubeide_setup.md`
+- `stm32_fw/usb_v1/docs/flashing_swd_dfu.md`
+- `stm32_fw/usb_v1/docs/bench_validation.md`
+- `stm32_fw/usb_v1/docs/pi_integration.md`
 
 ## Deployment to Raspberry Pi
 
@@ -436,6 +436,7 @@ python3 scripts/build_racing_path_from_csv.py \
 2. Some Webots bridge/controller paths use `/cmd_vel` (`geometry_msgs/msg/Twist`).
 3. If you combine those components directly, add or enable an explicit command adapter (`DriveCommand <-> Twist`) so command topics/types are consistent.
 4. The setup scripts and docs include both baseline and legacy references; use launch files present in `covapsy_bringup/launch/` as ground truth for this workspace state.
+5. SPI backend support was removed in this branch; real-car STM32 transport is USB serial via `/dev/stm32_mcu`.
 
 ## Extra Docs
 

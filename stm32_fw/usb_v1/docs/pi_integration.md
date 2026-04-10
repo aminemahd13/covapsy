@@ -1,4 +1,4 @@
-# Pi / ROS Integration (SPI Backend)
+# Pi / ROS Integration (USB Backend)
 
 This is the real-car integration flow after firmware flashing.
 
@@ -11,18 +11,21 @@ bash scripts/setup_pi.sh
 bash scripts/install_ros2.sh
 ```
 
-These scripts enable `spi` and install `spidev` dependencies.
+These scripts install serial dependencies and create a stable STM32 symlink (`/dev/stm32_mcu`).
 
-## 2. HAT Jumper Position
+## 2. Verify USB Device Binding
 
-For SPI backend with STM32-generated PWM:
+Plug STM32 into USB and verify:
 
-- propulsion PWM source jumper -> STM32 side (left)
-- steering PWM source jumper -> STM32 side (left)
+```bash
+ls -l /dev/stm32_mcu
+```
 
-Reference:
+If missing, inspect USB identity and update udev matching as needed:
 
-- `docs/HAT_JUMPERS.md`
+```bash
+udevadm info -a -n /dev/ttyACM0 | less
+```
 
 ## 3. Deploy and Build ROS Workspace
 
@@ -42,34 +45,33 @@ colcon build --symlink-install --parallel-workers 2
 source install/setup.bash
 ```
 
-## 4. Safe Bringup (SPI)
+## 4. Safe Bringup (USB)
 
 ```bash
-ros2 launch covapsy_bringup car_safe.launch.py backend:=spi
+ros2 launch covapsy_bringup car_safe.launch.py
 ```
 
-Expected status:
+Expected status transition on `/bridge_status`:
 
-- `/mcu_status` includes `backend=spi;ok:spi:...`
-- no `error:spi_open` or `error:spi_xfer`
+- starts as `USB_DISCONNECTED` or `USB_TIMEOUT` until telemetry arrives
+- moves to `WAIT_START` or `RUN` when link is healthy
 
 ## 5. Runtime Checks
 
 ```bash
-ros2 topic echo /mcu_status --once
+ros2 topic echo /bridge_status --once
 ros2 topic echo /wheel_speed --once
 ros2 topic echo /rear_obstacle --once
 ```
 
-Arm race control and then apply low-speed reactive command:
+Arm race control and publish low-speed command path:
 
 ```bash
 ros2 topic pub /race_start std_msgs/msg/Bool "{data: true}" --once
-ros2 topic pub /cmd_vel_reactive geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 0.0}}" -r 5
 ```
 
-Stop publisher and confirm watchdog stop within `0.25` s.
-Then stop race control:
+Stop command source and confirm watchdog neutral behavior within timeout,
+then stop race control:
 
 ```bash
 ros2 topic pub /race_stop std_msgs/msg/Bool "{data: true}" --once

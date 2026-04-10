@@ -20,7 +20,7 @@ Steps:
 Optional CLI (STM32CubeProgrammer):
 
 ```powershell
-STM32_Programmer_CLI.exe -c port=SWD -w .\build\hat_v1.bin 0x08000000 -v -rst
+STM32_Programmer_CLI.exe -c port=SWD -w .\build\usb_v1.bin 0x08000000 -v -rst
 ```
 
 ## B. USB DFU (Fallback)
@@ -42,12 +42,12 @@ Steps:
 CLI example:
 
 ```powershell
-STM32_Programmer_CLI.exe -c port=USB1 -w .\build\hat_v1.bin 0x08000000 -v -rst
+STM32_Programmer_CLI.exe -c port=USB1 -w .\build\usb_v1.bin 0x08000000 -v -rst
 ```
 
 ## Post-Flash Verification
 
 - Device boots without debugger attached.
 - PWM outputs are neutral at startup.
-- SPI transaction runs with valid headers/checksum.
+- USB command parser accepts valid `CMD,...` lines.
 - Watchdog timeout forces neutral if command stream stops.

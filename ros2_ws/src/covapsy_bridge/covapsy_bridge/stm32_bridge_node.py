@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
+import math
 import time
+from typing import Optional
 
 import rclpy
 from covapsy_interfaces.msg import DriveCommand
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, String
+
+from covapsy_bridge.usb_protocol import encode_command_line, parse_telemetry_line
+
+try:
+    import serial
+    from serial import SerialException
+except Exception:  # pragma: no cover - optional import in non-hardware env
+    serial = None
+
+    class SerialException(Exception):
+        pass
 
 
 class STM32BridgeNode(Node):
@@ -16,6 +29,10 @@ class STM32BridgeNode(Node):
         self.declare_parameter('competition_mode', True)
         self.declare_parameter('require_start_signal', True)
         self.declare_parameter('allow_restart_after_stop', False)
+        self.declare_parameter('serial_device', '/dev/stm32_mcu')
+        self.declare_parameter('serial_baud', 115200)
+        self.declare_parameter('serial_open_retry_s', 1.0)
+        self.declare_parameter('telemetry_timeout_s', 0.25)
 
         self.watchdog_timeout = float(self.get_parameter('watchdog_timeout_s').value)
         self.max_speed = float(self.get_parameter('max_speed_mps').value)
@@ -23,11 +40,26 @@ class STM32BridgeNode(Node):
         self.competition_mode = bool(self.get_parameter('competition_mode').value)
         self.require_start_signal = bool(self.get_parameter('require_start_signal').value)
         self.allow_restart_after_stop = bool(self.get_parameter('allow_restart_after_stop').value)
+        self.serial_device = str(self.get_parameter('serial_device').value)
+        self.serial_enabled = bool(self.serial_device.strip())
+        self.serial_baud = int(self.get_parameter('serial_baud').value)
+        self.serial_open_retry = float(self.get_parameter('serial_open_retry_s').value)
+        self.telemetry_timeout = float(self.get_parameter('telemetry_timeout_s').value)
 
         self.started = not self.require_start_signal
         self.stopped = False
         self.last_cmd = DriveCommand()
         self.last_cmd_time = time.monotonic()
+        self.last_watchdog_brake = False
+
+        self.serial_conn: Optional[object] = None
+        self.last_serial_attempt = 0.0
+        self.last_telemetry_time = 0.0
+        self.last_wheel_speed = 0.0
+        self.last_rear_obstacle = False
+        self.last_status_code = 0
+        self.parse_error_until = 0.0
+        self.seq = 0
 
         self.create_subscription(DriveCommand, '/cmd_drive', self.cmd_cb, 20)
         self.create_subscription(Bool, '/race_start', self.start_cb, 10)
@@ -39,6 +71,8 @@ class STM32BridgeNode(Node):
         self.lowlevel_cmd_pub = self.create_publisher(DriveCommand, '/stm32/cmd_drive', 20)
 
         self.timer = self.create_timer(0.02, self.tick)
+        if serial is None:
+            self.get_logger().error('pyserial not available; bridge will stay in USB_DISCONNECTED state.')
         self.get_logger().info('stm32_bridge_node ready')
 
     def start_cb(self, msg: Bool) -> None:
@@ -54,49 +88,166 @@ class STM32BridgeNode(Node):
         self.last_cmd = msg
         self.last_cmd_time = time.monotonic()
 
-    def _limited_cmd(self) -> DriveCommand:
+    def _neutral_cmd(self) -> DriveCommand:
         cmd = DriveCommand()
         cmd.header.stamp = self.get_clock().now().to_msg()
         cmd.header.frame_id = 'base_link'
+        cmd.speed_mps = 0.0
+        cmd.steer_rad = 0.0
+        cmd.emergency_brake = True
+        return cmd
+
+    def _limited_cmd(self) -> tuple[DriveCommand, bool, bool]:
+        cmd = self._neutral_cmd()
 
         if not self.started:
-            cmd.speed_mps = 0.0
-            cmd.steer_rad = 0.0
-            cmd.emergency_brake = True
-            return cmd
+            return cmd, False, False
 
         age = time.monotonic() - self.last_cmd_time
         if age > self.watchdog_timeout:
-            cmd.speed_mps = 0.0
-            cmd.steer_rad = 0.0
-            cmd.emergency_brake = True
-            return cmd
+            return cmd, False, True
 
         cmd.speed_mps = max(-0.8, min(self.max_speed, self.last_cmd.speed_mps))
         cmd.steer_rad = max(-self.max_steer, min(self.max_steer, self.last_cmd.steer_rad))
         cmd.emergency_brake = bool(self.last_cmd.emergency_brake)
-        return cmd
+        return cmd, True, False
+
+    def _close_serial(self) -> None:
+        if self.serial_conn is None:
+            return
+        try:
+            self.serial_conn.close()
+        except Exception:
+            pass
+        self.serial_conn = None
+
+    def _ensure_serial(self, now: float) -> bool:
+        if serial is None:
+            return False
+        if not self.serial_enabled:
+            return False
+        if self.serial_conn is not None and self.serial_conn.is_open:
+            return True
+        if now - self.last_serial_attempt < self.serial_open_retry:
+            return False
+
+        self.last_serial_attempt = now
+        try:
+            self.serial_conn = serial.Serial(
+                port=self.serial_device,
+                baudrate=self.serial_baud,
+                timeout=0.0,
+                write_timeout=0.0,
+            )
+            self.serial_conn.reset_input_buffer()
+            self.serial_conn.reset_output_buffer()
+            self.get_logger().info(
+                f'Connected to STM32 USB serial: {self.serial_device} @ {self.serial_baud} baud'
+            )
+            return True
+        except Exception as exc:
+            self.serial_conn = None
+            self.get_logger().warn(
+                f'Unable to open STM32 serial device {self.serial_device}: {exc}'
+            )
+            return False
+
+    def _read_telemetry(self, now: float) -> None:
+        if self.serial_conn is None:
+            return
+        for _ in range(20):
+            try:
+                raw = self.serial_conn.readline()
+            except SerialException:
+                self._close_serial()
+                return
+
+            if not raw:
+                return
+
+            line = raw.decode('ascii', errors='ignore').strip()
+            if not line:
+                continue
+
+            try:
+                seq, wheel_speed, rear_obstacle, status_code = parse_telemetry_line(line)
+            except Exception:
+                self.parse_error_until = now + 1.0
+                self.get_logger().warn(f'Invalid STM32 telemetry line: {line!r}')
+                continue
+
+            self.seq = max(self.seq, seq + 1)
+            self.last_wheel_speed = wheel_speed
+            self.last_rear_obstacle = rear_obstacle
+            self.last_status_code = status_code
+            self.last_telemetry_time = now
+
+    def _send_command(self, cmd: DriveCommand, run_enable: bool) -> None:
+        if self.serial_conn is None:
+            return
+        try:
+            line = encode_command_line(
+                seq=self.seq,
+                steer_deg=math.degrees(float(cmd.steer_rad)),
+                speed_mps=float(cmd.speed_mps),
+                run_enable=bool(run_enable),
+                emergency_brake=bool(cmd.emergency_brake),
+            )
+            self.serial_conn.write(line.encode('ascii'))
+            self.seq += 1
+        except SerialException:
+            self._close_serial()
+
+    def _usb_state(self, now: float, has_serial: bool) -> str:
+        if not has_serial:
+            return 'USB_DISCONNECTED'
+        if (now - self.last_telemetry_time) > self.telemetry_timeout:
+            return 'USB_TIMEOUT'
+        if now < self.parse_error_until:
+            return 'USB_PARSE_ERROR'
+        return 'OK'
 
     def tick(self) -> None:
-        cmd = self._limited_cmd()
+        now = time.monotonic()
+        has_serial = self._ensure_serial(now)
+        if has_serial:
+            self._read_telemetry(now)
+
+        limited_cmd, run_enable, watchdog_brake = self._limited_cmd()
+        self.last_watchdog_brake = watchdog_brake
+
+        usb_state = self._usb_state(now, has_serial)
+        if usb_state != 'OK':
+            cmd = self._neutral_cmd()
+            run_enable = False
+        else:
+            cmd = limited_cmd
+
+        self._send_command(cmd, run_enable)
         self.lowlevel_cmd_pub.publish(cmd)
 
         wheel = Float32()
-        wheel.data = float(cmd.speed_mps)
+        wheel.data = float(self.last_wheel_speed if usb_state == 'OK' else 0.0)
         self.wheel_speed_pub.publish(wheel)
 
         rear = Bool()
-        rear.data = False
+        rear.data = bool(self.last_rear_obstacle if usb_state == 'OK' else False)
         self.rear_obstacle_pub.publish(rear)
 
         status = String()
-        if not self.started:
+        if usb_state != 'OK':
+            status.data = usb_state
+        elif not self.started or self.last_status_code == 2:
             status.data = 'WAIT_START'
-        elif abs(cmd.speed_mps) < 1e-4 and (time.monotonic() - self.last_cmd_time) > self.watchdog_timeout:
+        elif self.last_watchdog_brake or self.last_status_code in (1, 3):
             status.data = 'WATCHDOG_BRAKE'
         else:
             status.data = 'RUN'
         self.status_pub.publish(status)
+
+    def destroy_node(self):
+        self._close_serial()
+        return super().destroy_node()
 
 
 def main(args=None):

@@ -32,6 +32,21 @@ ros2 launch covapsy_bringup car_race.launch.py
 
 Note: `sim_webots.launch.py mode:=race` auto-selects `Piste_CoVAPSy_2025a_multicar_ros2.wbt` unless `world:=...` is provided.
 
+## STM32 USB Link Checks (Real Car)
+
+Before launching real-car profiles, confirm the USB symlink exists:
+
+```bash
+ls -l /dev/stm32_mcu
+```
+
+Bridge status values:
+
+- `USB_DISCONNECTED`: serial device missing or cannot be opened
+- `USB_TIMEOUT`: no telemetry received within timeout
+- `USB_PARSE_ERROR`: malformed telemetry received
+- `WAIT_START`, `WATCHDOG_BRAKE`, `RUN`: normal runtime states once USB link is healthy
+
 ## sim_reactive Validation Commands
 
 ```bash

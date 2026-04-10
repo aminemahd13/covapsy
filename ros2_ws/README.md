@@ -135,6 +135,7 @@ ros2_ws/
   - pub: /rear_obstacle (std_msgs/msg/Bool)
   - pub: /bridge_status (std_msgs/msg/String)
   - pub: /stm32/cmd_drive (covapsy_interfaces/msg/DriveCommand)
+  - runtime: USB serial transport to STM32 (`/dev/stm32_mcu`, 115200, CSV `CMD`/`TEL` lines)
 
 ## Parameter File Plan
 

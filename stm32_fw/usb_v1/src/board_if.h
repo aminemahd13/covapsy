@@ -9,15 +9,15 @@
 /*
  * Hardware abstraction interface.
  * Implement these functions with STM32 HAL calls for your exact pin mapping.
- * hat_v1 baseline: SPI3 on PB3/PB4/PB5, no wired NSS (software NSS).
+ * usb_v1 baseline: USB serial link on UART/CDC transport.
  */
 
 void Board_Init(void);
 uint32_t Board_Millis(void);
 void Board_DelayMs(uint32_t delay_ms);
 
-bool Board_SpiReadFrame(uint8_t out_frame[FW_PROTOCOL_FRAME_SIZE]);
-void Board_SpiSetReplyFrame(const uint8_t frame[FW_PROTOCOL_FRAME_SIZE]);
+bool Board_UsbReadLine(char *out_line, uint32_t out_line_size);
+void Board_UsbWriteLine(const char *line);
 
 void Board_SetPropulsionDuty(float duty_percent);
 void Board_SetSteeringDuty(float duty_percent);

@@ -2,15 +2,9 @@
 #define FW_CONFIG_H
 
 /* Protocol version must be copied into release notes for compatibility tracking. */
-#define FW_PROTOCOL_VERSION "1.1.0"
+#define FW_PROTOCOL_VERSION "2.0.0"
 
-#define FW_PROTOCOL_FRAME_SIZE 6u
-#define FW_PROTOCOL_HEADER0 0x55u
-#define FW_PROTOCOL_HEADER1 0x55u
-#define FW_PROTOCOL_STEERING_INDEX 2u
-#define FW_PROTOCOL_SPEED_INDEX 3u
-#define FW_PROTOCOL_FLAGS_INDEX 4u
-#define FW_PROTOCOL_CHECKSUM_INDEX 5u
+#define FW_PROTOCOL_LINE_MAX 96u
 
 /* Command flags (Pi -> STM32). */
 #define FW_CMD_FLAG_RUN_ENABLE 0x01u
@@ -21,6 +15,7 @@
 
 #define FW_WATCHDOG_TIMEOUT_MS 250u
 #define FW_CONTROL_LOOP_PERIOD_MS 1u
+#define FW_TELEMETRY_PERIOD_MS 20u
 
 /* Baseline PWM calibration values aligned with professor STM32 calibration guide. */
 #define FW_PWM_PROP_STOP 7.5f
@@ -34,10 +29,10 @@
 #define FW_PWM_STEERING_CENTER 7.4f
 
 /*
- * Baseline STM32 peripheral bindings (NUCLEO-G431KB + HAT v1re2).
+ * Baseline STM32 peripheral bindings (NUCLEO-G431KB + USB serial transport).
  * These symbols are expected from Cube-generated HAL files.
  */
-#define FW_SPI_HANDLE hspi3
+#define FW_USB_UART_HANDLE huart1
 #define FW_PWM_TIMER_HANDLE htim1
 #define FW_PWM_PROP_CHANNEL TIM_CHANNEL_1
 #define FW_PWM_STEERING_CHANNEL TIM_CHANNEL_4
@@ -64,7 +59,7 @@
 #define FW_REAR_OBSTACLE_ADC_THRESHOLD_RAW 2048u /* 12-bit ADC range: 0..4095 */
 #define FW_REAR_OBSTACLE_ACTIVE_HIGH 1u
 
-/* Optional logging (set to 1 if USART is configured and desired). */
+/* Optional logging (set to 1 if UART is configured and desired). */
 #define FW_LOG_USE_UART 0u
 #define FW_LOG_UART_HANDLE huart1
 

@@ -1,6 +1,6 @@
 # Windows STM32CubeIDE Setup
 
-This runbook creates a project in `stm32_fw/hat_v1/cubeide_project` and imports the firmware logic from `src/`.
+This runbook creates a project in `stm32_fw/usb_v1/cubeide_project` and imports the firmware logic from `src/`.
 
 ## 1. Install Tooling
 
@@ -17,7 +17,7 @@ Verify ST-LINK connection with STM32CubeProgrammer before opening CubeIDE.
 1. Open STM32CubeIDE.
 2. `File` -> `New` -> `STM32 Project`.
 3. Select exact MCU from `docs/pinmap.md`.
-4. Project location: `mycar/stm32_fw/hat_v1/cubeide_project`.
+4. Project location: `mycar/stm32_fw/usb_v1/cubeide_project`.
 5. Build configuration: keep `Debug` and `Release`.
 
 ## 3. Configure Peripherals (CubeMX view)
@@ -25,13 +25,12 @@ Verify ST-LINK connection with STM32CubeProgrammer before opening CubeIDE.
 Use `docs/pinmap.md` to configure:
 
 - system clock source and frequency
-- SPI peripheral in slave mode, mode 0 compatibility:
-  - baseline instance: `SPI3`
-  - baseline pins: `PB3/PB4/PB5` (`D13/D12/D11`)
-  - `NSS` is not wired on the HAT baseline, so use software NSS
+- USB serial transport path:
+  - preferred: native USB CDC device (if enabled in your project)
+  - fallback: `USART1` (`PA9/PA10`) bridged through USB-UART
 - timer PWM channels for propulsion and steering at `50 Hz`
-- GPIO/EXTI for rear obstacle input
-- optional timer/input-capture or ADC for wheel speed source
+- GPIO/EXTI or ADC for rear obstacle input
+- timer input-capture or equivalent for wheel speed source
 
 ## 4. Import Firmware Logic
 
@@ -42,7 +41,7 @@ Copy files from `src/` into your project `Core/Src` and `Core/Inc`:
 - `control_mapping.h`, `control_mapping.c`
 - `fw_app.h`, `fw_app.c`
 - `board_if.h`
-- use `board_port_template.c` as a working baseline board port (rename only if preferred)
+- use `board_port_template.c` as baseline board port
 - use `main.c` as integration reference
 
 Then wire board functions to HAL generated code.
@@ -53,7 +52,7 @@ Then wire board functions to HAL generated code.
 2. Build project.
 3. Confirm generated artifact (`.elf` / `.bin`) exists.
 4. Copy release files to:
-   - `stm32_fw/hat_v1/releases/<version>/`
+   - `stm32_fw/usb_v1/releases/<version>/`
 
 ## 6. Next Steps
 

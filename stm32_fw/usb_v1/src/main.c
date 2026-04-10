@@ -9,24 +9,26 @@
 int main(void)
 {
     fw_app_t app;
-    uint8_t rx_frame[FW_PROTOCOL_FRAME_SIZE] = {0u};
-    uint8_t tx_frame[FW_PROTOCOL_FRAME_SIZE] = {0u};
+    char rx_line[FW_PROTOCOL_LINE_MAX] = {0};
+    char tx_line[FW_PROTOCOL_LINE_MAX] = {0};
     fw_pwm_output_t pwm = {FW_PWM_PROP_STOP, FW_PWM_STEERING_CENTER};
     fw_telemetry_t telemetry = {0.0f, false, 0u};
     bool watchdog_forced_stop = false;
     uint32_t now_ms;
+    uint32_t last_tx_ms;
 
     Board_Init();
     now_ms = Board_Millis();
+    last_tx_ms = now_ms;
     FwApp_Init(&app, now_ms);
 
     for (;;)
     {
         now_ms = Board_Millis();
 
-        if (Board_SpiReadFrame(rx_frame))
+        if (Board_UsbReadLine(rx_line, sizeof(rx_line)))
         {
-            (void)FwApp_OnSpiFrame(&app, rx_frame, now_ms);
+            (void)FwApp_OnCommandLine(&app, rx_line, now_ms);
         }
 
         telemetry.wheel_speed_m_s = Board_ReadWheelSpeedMps();
@@ -38,12 +40,17 @@ int main(void)
             &telemetry,
             now_ms,
             &pwm,
-            tx_frame,
+            tx_line,
+            sizeof(tx_line),
             &watchdog_forced_stop);
 
         Board_SetPropulsionDuty(pwm.propulsion_duty);
         Board_SetSteeringDuty(pwm.steering_duty);
-        Board_SpiSetReplyFrame(tx_frame);
+        if ((now_ms - last_tx_ms) >= FW_TELEMETRY_PERIOD_MS)
+        {
+            Board_UsbWriteLine(tx_line);
+            last_tx_ms = now_ms;
+        }
 
         if (watchdog_forced_stop)
         {

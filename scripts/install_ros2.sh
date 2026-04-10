@@ -44,7 +44,6 @@ sudo apt install -y \
   ros-jazzy-ackermann-msgs \
   ros-jazzy-rmw-cyclonedds-cpp \
   python3-serial \
-  python3-spidev \
   python3-colcon-common-extensions \
   python3-rosdep
 

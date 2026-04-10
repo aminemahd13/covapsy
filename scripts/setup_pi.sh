@@ -55,9 +55,10 @@ KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", \
   SYMLINK+="rplidar", MODE="0666"
 EOF
 
-# STM32 UART
-sudo tee /etc/udev/rules.d/99-stm32-uart.rules << 'EOF'
-KERNEL=="ttyAMA0", MODE="0666"
+# STM32 USB serial symlink (/dev/stm32_mcu)
+sudo tee /etc/udev/rules.d/99-stm32-mcu.rules << 'EOF'
+SUBSYSTEM=="tty", KERNEL=="ttyACM*", ENV{ID_VENDOR_ID}=="0483", SYMLINK+="stm32_mcu", MODE="0666"
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ENV{ID_VENDOR_ID}=="0483", SYMLINK+="stm32_mcu", MODE="0666"
 EOF
 
 sudo udevadm control --reload-rules
@@ -73,7 +74,6 @@ if [ -f "$BOOT_CONFIG" ]; then
 # === COVAPSY Pi 5 Configuration ===
 dtparam=uart0=on
 usb_max_current_enable=1
-dtparam=spi=on
 dtparam=i2c_arm=on
 EOF
         echo "  Boot config updated"
@@ -84,7 +84,7 @@ fi
 
 # -- Python dependencies --
 echo "[7/7] Installing Python dependencies..."
-pip3 install --user pyserial numpy spidev rpi-hardware-pwm
+pip3 install --user pyserial numpy rpi-hardware-pwm
 
 echo ""
 echo "=========================================="
