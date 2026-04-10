@@ -1,0 +1,16 @@
+!SESSION 2026-04-10 23:39:24.127 -----------------------------------------------
+eclipse.buildId=Version 2.1.1
+java.version=21.0.9
+java.vendor=Eclipse Adoptium
+BootLoader constants: OS=macosx, ARCH=aarch64, WS=cocoa, NL=en_US
+Framework arguments:  -keyring /Users/kris/.eclipse_keyring
+Command-line arguments:  -os macosx -ws cocoa -arch aarch64 -keyring /Users/kris/.eclipse_keyring
+
+!ENTRY com.st.stm32cube.ide.mcu.informationcenter 1 1 2026-04-10 23:39:59.298
+!MESSAGE Log4j2 initialized with config file /Users/kris/01-Projects/covap/covapsy/stm32_fw/usb_v1/cubeide_project/.metadata/.log4j2.xml
+
+!ENTRY com.st.stm32cube.ide.mcu.ide 1 1 2026-04-10 23:40:00.778
+!MESSAGE Started RMI Server, listening on port 41337
+
+!ENTRY org.eclipse.cdt.core 1 0 2026-04-10 23:42:36.893
+!MESSAGE Indexed 'covapsy_usb_v1' (3 sources, 53 headers) in 0.314 sec: 1,954 declarations; 2,864 references; 0 unresolved inclusions; 2 syntax errors; 2 unresolved names (0.041%)
