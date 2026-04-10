@@ -59,3 +59,4 @@ stm32_bridge_node:
   ros__parameters:
     competition_mode: false
     require_start_signal: false
+    serial_device: ""

@@ -15,5 +15,7 @@
   <depend>covapsy_control</depend>
   <depend>covapsy_bridge</depend>
   <depend>covapsy_tools</depend>
+  <exec_depend>rplidar_ros</exec_depend>
+  <exec_depend>realsense2_camera</exec_depend>
   <export><build_type>ament_python</build_type></export>
 </package>

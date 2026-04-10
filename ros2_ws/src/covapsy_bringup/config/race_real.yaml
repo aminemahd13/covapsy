@@ -31,6 +31,11 @@ mode_controller_node:
     odom_progress_window_s: 1.2
     odom_min_displacement_m: 0.015
 
+direction_detector_node:
+  ros__parameters:
+    image_topic: /camera/color/image_raw
+    scan_topic: /scan_filtered
+
 track_learner_node:
   ros__parameters:
     min_quality: 0.8
@@ -45,6 +50,30 @@ stm32_bridge_node:
     competition_mode: true
     require_start_signal: true
     allow_restart_after_stop: false
+    serial_device: /dev/stm32_mcu
+    serial_baud: 115200
+    serial_open_retry_s: 1.0
+    telemetry_timeout_s: 0.25
     watchdog_timeout_s: 0.2
+    lcd_enabled: true
+    lcd_update_hz: 5.0
+    lcd_page_period_s: 2.0
+    external_steering_mode: true
     max_speed_mps: 1.0
     max_steer_rad: 0.42
+
+dynamixel_steering_node:
+  ros__parameters:
+    require_start_signal: true
+    allow_restart_after_stop: false
+    serial_device: /dev/waveshare_servo
+    baud_rate: 57600
+    serial_open_retry_s: 1.0
+    protocol_version: 2.0
+    dxl_id: 1
+    center_tick: 2048
+    left_tick: 2560
+    right_tick: 1536
+    max_steer_rad: 0.42
+    watchdog_timeout_s: 0.2
+    publish_present_position: true

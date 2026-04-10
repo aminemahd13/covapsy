@@ -49,15 +49,39 @@ sudo systemctl restart zramswap
 # -- udev rules --
 echo "[5/7] Creating udev rules..."
 
-# RPLidar
-sudo tee /etc/udev/rules.d/99-rplidar.rules << 'EOF'
-KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", \
-  SYMLINK+="rplidar", MODE="0666"
+# Set per-device serials before running if available:
+#   export RPLIDAR_SERIAL="<udevadm serial>"
+#   export WAVESHARE_SERIAL="<udevadm serial>"
+RPLIDAR_SERIAL="${RPLIDAR_SERIAL:-}"
+WAVESHARE_SERIAL="${WAVESHARE_SERIAL:-}"
+WAVESHARE_VENDOR_ID="${WAVESHARE_VENDOR_ID:-1a86}"
+WAVESHARE_PRODUCT_ID="${WAVESHARE_PRODUCT_ID:-55d3}"
+WAVESHARE_MODEL="${WAVESHARE_MODEL:-USB_Single_Serial}"
+
+rplidar_serial_match=""
+if [ -n "$RPLIDAR_SERIAL" ]; then
+  rplidar_serial_match=", ATTRS{serial}==\"$RPLIDAR_SERIAL\""
+fi
+
+waveshare_serial_match=""
+if [ -n "$WAVESHARE_SERIAL" ]; then
+  waveshare_serial_match=", ATTRS{serial}==\"$WAVESHARE_SERIAL\""
+fi
+
+# RPLidar (/dev/rplidar) - match by VID/PID (+ optional serial)
+sudo tee /etc/udev/rules.d/99-rplidar.rules > /dev/null << EOF
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ENV{ID_VENDOR_ID}=="10c4", ENV{ID_MODEL_ID}=="ea60"${rplidar_serial_match}, SYMLINK+="rplidar", MODE="0666"
 EOF
 
-# STM32 UART
-sudo tee /etc/udev/rules.d/99-stm32-uart.rules << 'EOF'
-KERNEL=="ttyAMA0", MODE="0666"
+# Waveshare bus-servo adapter (/dev/waveshare_servo) - this adapter often enumerates as ttyACM* on Pi 5
+sudo tee /etc/udev/rules.d/99-waveshare-servo.rules > /dev/null << EOF
+SUBSYSTEM=="tty", KERNEL=="ttyACM*", ENV{ID_VENDOR_ID}=="${WAVESHARE_VENDOR_ID}", ENV{ID_MODEL_ID}=="${WAVESHARE_PRODUCT_ID}"${waveshare_serial_match}, SYMLINK+="waveshare_servo", MODE="0666"
+EOF
+
+# STM32 USB serial symlink (/dev/stm32_mcu)
+sudo tee /etc/udev/rules.d/99-stm32-mcu.rules << 'EOF'
+SUBSYSTEM=="tty", KERNEL=="ttyACM*", ENV{ID_VENDOR_ID}=="0483", SYMLINK+="stm32_mcu", MODE="0666"
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ENV{ID_VENDOR_ID}=="0483", SYMLINK+="stm32_mcu", MODE="0666"
 EOF
 
 sudo udevadm control --reload-rules
@@ -73,7 +97,6 @@ if [ -f "$BOOT_CONFIG" ]; then
 # === COVAPSY Pi 5 Configuration ===
 dtparam=uart0=on
 usb_max_current_enable=1
-dtparam=spi=on
 dtparam=i2c_arm=on
 EOF
         echo "  Boot config updated"
@@ -84,7 +107,7 @@ fi
 
 # -- Python dependencies --
 echo "[7/7] Installing Python dependencies..."
-pip3 install --user pyserial numpy spidev rpi-hardware-pwm
+pip3 install --user --break-system-packages pyserial numpy rpi-hardware-pwm
 
 echo ""
 echo "=========================================="

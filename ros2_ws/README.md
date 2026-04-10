@@ -7,7 +7,9 @@ This workspace is a clean ROS2 Jazzy rebuild for CoVAPSy 2026 with the following
 - Reactive safety overlay: race-only veto/speed-cap/brake layer.
 - RGB/RGB-D: direction and wrong-way confirmation only.
 - Recovery FSM: bounded BRAKE -> REVERSE -> REASSESS -> ESCALATE -> FAILSAFE_STOP.
-- STM32 bridge: final actuator authority with watchdog and hard limits.
+- Real-car split authority:
+  - STM32 bridge: propulsion + telemetry + race safety watchdog.
+  - DYNAMIXEL steering bridge: XL430 steering over USB (`/dev/waveshare_servo`).
 
 ## Package and File Tree
 
@@ -67,6 +69,7 @@ ros2_ws/
       setup.py
       covapsy_bridge/
         stm32_bridge_node.py
+        dynamixel_steering_node.py
     covapsy_tools/
       package.xml
       setup.py
@@ -87,7 +90,7 @@ ros2_ws/
   - pub: /reactive_debug (std_msgs/msg/Float32MultiArray)
 
 - direction_detector_node
-  - sub: /image_raw (sensor_msgs/msg/Image)
+  - sub: image topic param (default: /image_raw; real-car profiles: /camera/color/image_raw)
   - sub: /scan_filtered (sensor_msgs/msg/LaserScan)
   - pub: /wrong_direction (std_msgs/msg/Bool)
   - pub: /wrong_direction_confidence (std_msgs/msg/Float32)
@@ -131,10 +134,25 @@ ros2_ws/
   - sub: /cmd_drive (covapsy_interfaces/msg/DriveCommand)
   - sub: /race_start (std_msgs/msg/Bool)
   - sub: /race_stop (std_msgs/msg/Bool)
+  - sub: /car_mode (std_msgs/msg/String)
+  - sub: /race_telemetry (covapsy_interfaces/msg/RaceTelemetry)
+  - sub: /recovery_state (covapsy_interfaces/msg/RecoveryState)
+  - sub: /steering_status (std_msgs/msg/String)
   - pub: /wheel_speed (std_msgs/msg/Float32)
   - pub: /rear_obstacle (std_msgs/msg/Bool)
   - pub: /bridge_status (std_msgs/msg/String)
   - pub: /stm32/cmd_drive (covapsy_interfaces/msg/DriveCommand)
+  - runtime: USB serial transport to STM32 (`/dev/stm32_mcu`, 115200, CSV `CMD`/`LCD` out + `TEL` in)
+  - LCD bridge: builds a 4x16 operations status page and sends `LCD,<seq>,l1|l2|l3|l4` at low rate
+  - supports `external_steering_mode=true` for real-car split actuation
+
+- dynamixel_steering_node
+  - sub: /cmd_drive (covapsy_interfaces/msg/DriveCommand)
+  - sub: /race_start (std_msgs/msg/Bool)
+  - sub: /race_stop (std_msgs/msg/Bool)
+  - pub: /steering_status (std_msgs/msg/String)
+  - pub: /steering_present_position (std_msgs/msg/Int32)
+  - runtime: DYNAMIXEL Protocol 2.0 to XL430 via Waveshare USB adapter (`/dev/waveshare_servo`)
 
 ## Parameter File Plan
 
@@ -143,9 +161,9 @@ ros2_ws/
 - race_sim.yaml
   - RACE defaults for Webots with pursuit nominal + safety overlay.
 - learn_real.yaml
-  - conservative LEARN defaults for hardware.
+  - conservative LEARN defaults for hardware (includes STM32 OLED relay params).
 - race_real.yaml
-  - conservative RACE defaults for hardware.
+  - conservative RACE defaults for hardware (includes STM32 OLED relay params).
 
 Behavior is centralized in these files, not launch arguments.
 

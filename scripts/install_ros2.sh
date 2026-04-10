@@ -35,7 +35,8 @@ sudo apt install -y \
   ros-jazzy-nav2-bt-navigator \
   ros-jazzy-nav2-lifecycle-manager \
   ros-jazzy-rplidar-ros \
-  ros-jazzy-micro-ros-agent \
+  ros-jazzy-realsense2-camera \
+  ros-jazzy-dynamixel-sdk \
   ros-jazzy-tf2-ros \
   ros-jazzy-tf-transformations \
   ros-jazzy-robot-localization \
@@ -44,7 +45,6 @@ sudo apt install -y \
   ros-jazzy-ackermann-msgs \
   ros-jazzy-rmw-cyclonedds-cpp \
   python3-serial \
-  python3-spidev \
   python3-colcon-common-extensions \
   python3-rosdep
 
