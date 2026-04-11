@@ -6,6 +6,11 @@ from typing import Optional
 import rclpy
 from covapsy_interfaces.msg import DriveCommand, RaceTelemetry, RecoveryState
 from covapsy_bridge.lcd_status_formatter import LcdStatusSnapshot, build_lcd_lines
+from covapsy_bridge.serial_probe import (
+    build_baud_candidates,
+    build_device_candidates,
+    build_probe_pairs,
+)
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, String
 
@@ -33,9 +38,16 @@ class STM32BridgeNode(Node):
         self.declare_parameter('require_start_signal', True)
         self.declare_parameter('allow_restart_after_stop', False)
         self.declare_parameter('serial_device', '/dev/stm32_mcu')
+        self.declare_parameter(
+            'serial_device_candidates',
+            '/dev/stm32_mcu,/dev/ttyACM1,/dev/ttyAMA0',
+        )
         self.declare_parameter('serial_baud', 115200)
+        self.declare_parameter('serial_baud_candidates', '115200,57600,230400')
         self.declare_parameter('serial_open_retry_s', 1.0)
         self.declare_parameter('telemetry_timeout_s', 0.25)
+        self.declare_parameter('telemetry_reconnect_s', 1.5)
+        self.declare_parameter('allow_motion_without_telemetry', False)
         self.declare_parameter('lcd_enabled', True)
         self.declare_parameter('lcd_update_hz', 5.0)
         self.declare_parameter('lcd_page_period_s', 2.0)
@@ -47,15 +59,38 @@ class STM32BridgeNode(Node):
         self.competition_mode = bool(self.get_parameter('competition_mode').value)
         self.require_start_signal = bool(self.get_parameter('require_start_signal').value)
         self.allow_restart_after_stop = bool(self.get_parameter('allow_restart_after_stop').value)
-        self.serial_device = str(self.get_parameter('serial_device').value)
-        self.serial_enabled = bool(self.serial_device.strip())
+        self.serial_device = str(self.get_parameter('serial_device').value).strip()
+        serial_device_candidates_raw = str(
+            self.get_parameter('serial_device_candidates').value
+        ).strip()
+        self.serial_devices = build_device_candidates(
+            primary_device=self.serial_device,
+            candidates_csv=serial_device_candidates_raw,
+        )
+        self.serial_enabled = bool(self.serial_devices)
+
         self.serial_baud = int(self.get_parameter('serial_baud').value)
+        serial_baud_candidates_raw = str(
+            self.get_parameter('serial_baud_candidates').value
+        ).strip()
+        self.serial_bauds = build_baud_candidates(
+            primary_baud=self.serial_baud,
+            candidates_csv=serial_baud_candidates_raw,
+        )
         self.serial_open_retry = float(self.get_parameter('serial_open_retry_s').value)
         self.telemetry_timeout = float(self.get_parameter('telemetry_timeout_s').value)
+        self.telemetry_reconnect = max(
+            self.telemetry_timeout,
+            float(self.get_parameter('telemetry_reconnect_s').value),
+        )
+        self.allow_motion_without_telemetry = bool(
+            self.get_parameter('allow_motion_without_telemetry').value
+        )
         self.lcd_enabled = bool(self.get_parameter('lcd_enabled').value)
         lcd_update_hz = float(self.get_parameter('lcd_update_hz').value)
         self.lcd_period = 0.2 if lcd_update_hz <= 0.0 else (1.0 / lcd_update_hz)
         self.lcd_page_period = max(0.1, float(self.get_parameter('lcd_page_period_s').value))
+        self.serial_probes = build_probe_pairs(self.serial_devices, self.serial_bauds)
 
         self.started = not self.require_start_signal
         self.stopped = False
@@ -65,6 +100,10 @@ class STM32BridgeNode(Node):
 
         self.serial_conn: Optional[object] = None
         self.last_serial_attempt = 0.0
+        self.serial_probe_index = 0
+        self.active_serial_device = ''
+        self.active_serial_baud = 0
+        self.serial_open_time = 0.0
         self.last_telemetry_time = 0.0
         self.last_wheel_speed = 0.0
         self.last_rear_obstacle = False
@@ -99,6 +138,12 @@ class STM32BridgeNode(Node):
         self.timer = self.create_timer(0.02, self.tick)
         if serial is None:
             self.get_logger().error('pyserial not available; bridge will stay in USB_DISCONNECTED state.')
+        elif self.serial_enabled:
+            self.get_logger().info(
+                f'STM32 serial candidates: devices={self.serial_devices}, bauds={self.serial_bauds}'
+            )
+        else:
+            self.get_logger().warn('No STM32 serial device candidates configured; bridge disabled.')
         self.get_logger().info('stm32_bridge_node ready')
 
     def start_cb(self, msg: Bool) -> None:
@@ -157,7 +202,12 @@ class STM32BridgeNode(Node):
         cmd.emergency_brake = bool(self.last_cmd.emergency_brake)
         return cmd, True, False
 
-    def _close_serial(self) -> None:
+    def _advance_serial_probe(self) -> None:
+        if not self.serial_probes:
+            return
+        self.serial_probe_index = (self.serial_probe_index + 1) % len(self.serial_probes)
+
+    def _close_serial(self, *, advance_probe: bool = False) -> None:
         if self.serial_conn is None:
             return
         try:
@@ -165,37 +215,57 @@ class STM32BridgeNode(Node):
         except Exception:
             pass
         self.serial_conn = None
+        self.active_serial_device = ''
+        self.active_serial_baud = 0
+        self.serial_open_time = 0.0
+        if advance_probe:
+            self._advance_serial_probe()
 
     def _ensure_serial(self, now: float) -> bool:
         if serial is None:
             return False
         if not self.serial_enabled:
             return False
+        if not self.serial_probes:
+            return False
         if self.serial_conn is not None and self.serial_conn.is_open:
             return True
         if now - self.last_serial_attempt < self.serial_open_retry:
             return False
 
+        device, baud = self.serial_probes[self.serial_probe_index]
         self.last_serial_attempt = now
         try:
             self.serial_conn = serial.Serial(
-                port=self.serial_device,
-                baudrate=self.serial_baud,
+                port=device,
+                baudrate=baud,
                 timeout=0.0,
                 write_timeout=0.0,
             )
             self.serial_conn.reset_input_buffer()
             self.serial_conn.reset_output_buffer()
+            self.active_serial_device = device
+            self.active_serial_baud = int(baud)
+            self.serial_open_time = now
             self.get_logger().info(
-                f'Connected to STM32 USB serial: {self.serial_device} @ {self.serial_baud} baud'
+                f'Connected to STM32 serial: {device} @ {baud} baud'
             )
             return True
         except Exception as exc:
             self.serial_conn = None
             self.get_logger().warn(
-                f'Unable to open STM32 serial device {self.serial_device}: {exc}'
+                f'Unable to open STM32 serial device {device} @ {baud}: {exc}'
             )
+            self._advance_serial_probe()
             return False
+
+    def _telemetry_stream_stale(self, now: float) -> bool:
+        if self.serial_conn is None:
+            return False
+        reference = self.last_telemetry_time if self.last_telemetry_time > 0.0 else self.serial_open_time
+        if reference <= 0.0:
+            return False
+        return (now - reference) > self.telemetry_reconnect
 
     def _read_telemetry(self, now: float) -> None:
         if self.serial_conn is None:
@@ -204,7 +274,7 @@ class STM32BridgeNode(Node):
             try:
                 raw = self.serial_conn.readline()
             except SerialException:
-                self._close_serial()
+                self._close_serial(advance_probe=True)
                 return
 
             if not raw:
@@ -241,7 +311,7 @@ class STM32BridgeNode(Node):
             self.serial_conn.write(line.encode('ascii'))
             self.seq += 1
         except SerialException:
-            self._close_serial()
+            self._close_serial(advance_probe=True)
 
     def _maybe_flip_lcd_page(self, now: float) -> None:
         if (now - self.last_lcd_page_flip_time) < self.lcd_page_period:
@@ -288,12 +358,14 @@ class STM32BridgeNode(Node):
             self.lcd_seq += 1
             self.last_lcd_send_time = now
         except SerialException:
-            self._close_serial()
+            self._close_serial(advance_probe=True)
 
     def _usb_state(self, now: float, has_serial: bool) -> str:
         if not has_serial:
             return 'USB_DISCONNECTED'
         if (now - self.last_telemetry_time) > self.telemetry_timeout:
+            if self.allow_motion_without_telemetry:
+                return 'USB_NO_TELEMETRY'
             return 'USB_TIMEOUT'
         if now < self.parse_error_until:
             return 'USB_PARSE_ERROR'
@@ -304,12 +376,25 @@ class STM32BridgeNode(Node):
         has_serial = self._ensure_serial(now)
         if has_serial:
             self._read_telemetry(now)
+            if self._telemetry_stream_stale(now):
+                stale_for = now - (
+                    self.last_telemetry_time
+                    if self.last_telemetry_time > 0.0
+                    else self.serial_open_time
+                )
+                self.get_logger().warn(
+                    f'No STM32 telemetry from {self.active_serial_device} @ {self.active_serial_baud} '
+                    f'for {stale_for:.2f}s; trying next serial candidate.'
+                )
+                self._close_serial(advance_probe=True)
+                has_serial = False
 
         limited_cmd, run_enable, watchdog_brake = self._limited_cmd()
         self.last_watchdog_brake = watchdog_brake
 
         usb_state = self._usb_state(now, has_serial)
-        if usb_state != 'OK':
+        motion_enabled = usb_state in ('OK', 'USB_NO_TELEMETRY')
+        if not motion_enabled:
             cmd = self._neutral_cmd()
             run_enable = False
         else:
@@ -327,7 +412,14 @@ class STM32BridgeNode(Node):
         self.rear_obstacle_pub.publish(rear)
 
         status = String()
-        if usb_state != 'OK':
+        if usb_state == 'USB_NO_TELEMETRY':
+            if not self.started:
+                status.data = 'WAIT_START'
+            elif self.last_watchdog_brake:
+                status.data = 'WATCHDOG_BRAKE'
+            else:
+                status.data = 'RUN_NO_TELEMETRY'
+        elif usb_state != 'OK':
             status.data = usb_state
         elif not self.started or self.last_status_code == 2:
             status.data = 'WAIT_START'
