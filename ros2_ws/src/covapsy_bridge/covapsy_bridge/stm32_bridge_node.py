@@ -262,6 +262,9 @@ class STM32BridgeNode(Node):
     def _telemetry_stream_stale(self, now: float) -> bool:
         if self.serial_conn is None:
             return False
+        # In no-telemetry override mode, keep the chosen link stable once race is armed.
+        if self.allow_motion_without_telemetry and self.started:
+            return False
         reference = self.last_telemetry_time if self.last_telemetry_time > 0.0 else self.serial_open_time
         if reference <= 0.0:
             return False
