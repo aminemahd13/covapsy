@@ -64,7 +64,7 @@ Fallback profile:
 
 | Profile Macro | UART Handle | MCU Pins | Physical Path | Notes |
 |---|---|---|---|---|
-| `FW_TRANSPORT_STLINK_VCP` | `huart2` | `PA2` (TX), `PA3` (RX) | ST-LINK VCP over `ttyACM*` | Verify Nucleo solder bridges `SB2=ON`, `SB3=ON`; `PA3` cannot be used for rear-obstacle ADC in this profile. |
+| `FW_TRANSPORT_STLINK_VCP` | `huart2` | `PA2` (TX), `PA15` (RX) | ST-LINK VCP over `ttyACM*` | Verify Nucleo solder bridges `SB2=ON`, `SB3=ON`. |
 | `FW_TRANSPORT_USART1_D0D1` | `huart1` | `PA9 (D1)`, `PA10 (D0)` | Hat `TX_MCU/RX_MCU` or USB-UART bridge | Requires Hat jumpers `J_TX=2-3`, `J_RX=2-3`. |
 
 Before bench tests, confirm transport profile and wiring match.

@@ -27,7 +27,7 @@ Use `docs/pinmap.md` to configure:
 
 - system clock source and frequency
 - USB serial transport path profiles:
-  - default (`FW_TRANSPORT_STLINK_VCP`): `USART2` on `PA2/PA3` via ST-LINK VCP
+  - default (`FW_TRANSPORT_STLINK_VCP`): `USART2` on `PA2/PA15` via ST-LINK VCP
   - fallback (`FW_TRANSPORT_USART1_D0D1`): `USART1` on `PA9/PA10` via Hat/USB-UART
 - both `USART1` and `USART2` async parameters: `115200`, `8N1`, TX/RX enabled
 - timer PWM channels for propulsion and steering at `50 Hz`:
@@ -57,7 +57,7 @@ If your timer clock differs, recompute prescaler/period accordingly.
 For the default transport profile (`FW_TRANSPORT_STLINK_VCP`):
 
 - verify solder bridge `SB2=ON` (`PA2 -> ST-LINK VCP TX`)
-- verify solder bridge `SB3=ON` (`PA3 -> ST-LINK VCP RX`)
+- verify solder bridge `SB3=ON` (`PA15 -> ST-LINK VCP RX`)
 
 ### Board Target / ADC Handle Sanity Check
 
@@ -94,7 +94,7 @@ Important config alignment after copy:
 
 - default transport profile in `fw_config.h` is ST-LINK VCP (`USART2`)
 - fallback profile remains available on `USART1` (`PA9/PA10`)
-- for ST-LINK VCP on `PA3` RX, disable rear-obstacle ADC (`FW_REAR_OBSTACLE_USE_ADC=0u`)
+- if rear obstacle is on `PA3/ADC1_IN4`, set `FW_REAR_OBSTACLE_ADC_HANDLE` to `hadc1`
 - if your project does not configure `I2C1` + OLED, set `FW_OLED_ENABLE` to `0u`
 
 ## 5. Build
