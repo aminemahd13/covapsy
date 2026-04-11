@@ -36,7 +36,7 @@
  * These symbols are expected from Cube-generated HAL files.
  *
  * Transport profiles:
- * - FW_TRANSPORT_STLINK_VCP: STLINK VCP UART (USART2 on PA2/PA15, SB2/SB3 ON)
+ * - FW_TRANSPORT_STLINK_VCP: STLINK VCP UART (USART2 on PA2/PA3, SB2/SB3 ON)
  * - FW_TRANSPORT_USART1_D0D1: Hat UART nets TX_MCU/RX_MCU via D1/D0 (USART1)
  *
  * Net mapping from Hat schematic (fallback profile):
@@ -53,7 +53,7 @@
 #endif
 
 #if FW_TRANSPORT_PROFILE == FW_TRANSPORT_STLINK_VCP
-#define FW_USB_UART_HANDLE huart2          /* STLINK VCP: USART2 PA2/PA15 */
+#define FW_USB_UART_HANDLE huart2          /* STLINK VCP: USART2 PA2/PA3 */
 #elif FW_TRANSPORT_PROFILE == FW_TRANSPORT_USART1_D0D1
 #define FW_USB_UART_HANDLE huart1          /* TX_MCU / RX_MCU -> D1 / D0 */
 #else
@@ -79,9 +79,14 @@
 /*
  * Rear obstacle baseline source:
  * - CAPT_IR_D on PA3 (A2)
- * - by default read through ADC and converted to boolean with threshold
+ * - for ST-LINK VCP transport on boards where PA3 is wired to VCP RX, disable
+ *   ADC rear-obstacle sampling to avoid pin conflict.
  */
+#if FW_TRANSPORT_PROFILE == FW_TRANSPORT_STLINK_VCP
+#define FW_REAR_OBSTACLE_USE_ADC 0u
+#else
 #define FW_REAR_OBSTACLE_USE_ADC 1u
+#endif
 /*
  * Board-specific ADC instance for CAPT_IR_D (A2/PA3):
  * - NUCLEO-L432KC: hadc1

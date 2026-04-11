@@ -142,19 +142,6 @@ static bool Board_ProcessRxByte(
     return false;
 }
 
-static bool Board_UartAlreadyListed(UART_HandleTypeDef *const *list, uint32_t count, UART_HandleTypeDef *candidate)
-{
-    uint32_t i;
-    for (i = 0u; i < count; ++i)
-    {
-        if (list[i] == candidate)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 void Board_Init(void)
 {
     (void)HAL_TIM_PWM_Start(&FW_PWM_TIMER_HANDLE, FW_PWM_PROP_CHANNEL);
@@ -180,33 +167,17 @@ void Board_DelayMs(uint32_t delay_ms)
 bool Board_UsbReadLine(char *out_line, uint32_t out_line_size)
 {
     uint8_t rx_byte;
-    UART_HandleTypeDef *sources[3];
-    uint32_t source_count = 0u;
-    uint32_t i;
 
     if (out_line == 0 || out_line_size == 0u)
     {
         return false;
     }
 
-    sources[source_count++] = &FW_USB_UART_HANDLE;
-    if (!Board_UartAlreadyListed(sources, source_count, &huart1))
+    while (Board_UartReceiveByte(&FW_USB_UART_HANDLE, &rx_byte))
     {
-        sources[source_count++] = &huart1;
-    }
-    if (!Board_UartAlreadyListed(sources, source_count, &huart2))
-    {
-        sources[source_count++] = &huart2;
-    }
-
-    for (i = 0u; i < source_count; ++i)
-    {
-        while (Board_UartReceiveByte(sources[i], &rx_byte))
+        if (Board_ProcessRxByte(rx_byte, out_line, out_line_size))
         {
-            if (Board_ProcessRxByte(rx_byte, out_line, out_line_size))
-            {
-                return true;
-            }
+            return true;
         }
     }
 
@@ -236,23 +207,6 @@ void Board_UsbWriteLine(const char *line)
         (uint8_t *)bytes,
         (uint16_t)len,
         5u);
-
-    if (&FW_USB_UART_HANDLE != &huart1)
-    {
-        (void)HAL_UART_Transmit(
-            &huart1,
-            (uint8_t *)bytes,
-            (uint16_t)len,
-            5u);
-    }
-    if (&FW_USB_UART_HANDLE != &huart2)
-    {
-        (void)HAL_UART_Transmit(
-            &huart2,
-            (uint8_t *)bytes,
-            (uint16_t)len,
-            5u);
-    }
 }
 
 void Board_SetPropulsionDuty(float duty_percent)
