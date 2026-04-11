@@ -85,6 +85,76 @@ static bool Board_ApplyRearObstaclePolarity(bool raw_detected)
 #endif
 }
 
+static bool Board_UartReceiveByte(UART_HandleTypeDef *huart, uint8_t *out_byte)
+{
+    if (huart == 0 || out_byte == 0)
+    {
+        return false;
+    }
+    return HAL_UART_Receive(huart, out_byte, 1u, 0u) == HAL_OK;
+}
+
+static bool Board_ProcessRxByte(
+    uint8_t rx_byte,
+    char *out_line,
+    uint32_t out_line_size)
+{
+    uint32_t copy_len;
+
+    if (out_line == 0 || out_line_size == 0u)
+    {
+        return false;
+    }
+
+    if (rx_byte == '\r')
+    {
+        return false;
+    }
+
+    if (rx_byte == '\n')
+    {
+        if (s_usb_rx_len == 0u)
+        {
+            return false;
+        }
+
+        copy_len = s_usb_rx_len;
+        if (copy_len >= out_line_size)
+        {
+            copy_len = out_line_size - 1u;
+        }
+
+        (void)memcpy(out_line, s_usb_rx_accum, copy_len);
+        out_line[copy_len] = '\0';
+        s_usb_rx_len = 0u;
+        return true;
+    }
+
+    if (s_usb_rx_len < (FW_PROTOCOL_LINE_MAX - 1u))
+    {
+        s_usb_rx_accum[s_usb_rx_len++] = (char)rx_byte;
+    }
+    else
+    {
+        /* Overflow: drop partial line and wait for next newline. */
+        s_usb_rx_len = 0u;
+    }
+    return false;
+}
+
+static bool Board_UartAlreadyListed(UART_HandleTypeDef *const *list, uint32_t count, UART_HandleTypeDef *candidate)
+{
+    uint32_t i;
+    for (i = 0u; i < count; ++i)
+    {
+        if (list[i] == candidate)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 void Board_Init(void)
 {
     (void)HAL_TIM_PWM_Start(&FW_PWM_TIMER_HANDLE, FW_PWM_PROP_CHANNEL);
@@ -110,47 +180,33 @@ void Board_DelayMs(uint32_t delay_ms)
 bool Board_UsbReadLine(char *out_line, uint32_t out_line_size)
 {
     uint8_t rx_byte;
+    UART_HandleTypeDef *sources[3];
+    uint32_t source_count = 0u;
+    uint32_t i;
 
     if (out_line == 0 || out_line_size == 0u)
     {
         return false;
     }
 
-    while (HAL_UART_Receive(&FW_USB_UART_HANDLE, &rx_byte, 1u, 0u) == HAL_OK)
+    sources[source_count++] = &FW_USB_UART_HANDLE;
+    if (!Board_UartAlreadyListed(sources, source_count, &huart1))
     {
-        if (rx_byte == '\r')
-        {
-            continue;
-        }
+        sources[source_count++] = &huart1;
+    }
+    if (!Board_UartAlreadyListed(sources, source_count, &huart2))
+    {
+        sources[source_count++] = &huart2;
+    }
 
-        if (rx_byte == '\n')
+    for (i = 0u; i < source_count; ++i)
+    {
+        while (Board_UartReceiveByte(sources[i], &rx_byte))
         {
-            uint32_t copy_len;
-            if (s_usb_rx_len == 0u)
+            if (Board_ProcessRxByte(rx_byte, out_line, out_line_size))
             {
-                continue;
+                return true;
             }
-
-            copy_len = s_usb_rx_len;
-            if (copy_len >= out_line_size)
-            {
-                copy_len = out_line_size - 1u;
-            }
-
-            (void)memcpy(out_line, s_usb_rx_accum, copy_len);
-            out_line[copy_len] = '\0';
-            s_usb_rx_len = 0u;
-            return true;
-        }
-
-        if (s_usb_rx_len < (FW_PROTOCOL_LINE_MAX - 1u))
-        {
-            s_usb_rx_accum[s_usb_rx_len++] = (char)rx_byte;
-        }
-        else
-        {
-            /* Overflow: drop partial line and wait for next newline. */
-            s_usb_rx_len = 0u;
         }
     }
 
@@ -160,6 +216,7 @@ bool Board_UsbReadLine(char *out_line, uint32_t out_line_size)
 void Board_UsbWriteLine(const char *line)
 {
     size_t len;
+    const uint8_t *bytes;
 
     if (line == 0)
     {
@@ -172,11 +229,30 @@ void Board_UsbWriteLine(const char *line)
         return;
     }
 
+    bytes = (const uint8_t *)line;
+
     (void)HAL_UART_Transmit(
         &FW_USB_UART_HANDLE,
-        (uint8_t *)line,
+        (uint8_t *)bytes,
         (uint16_t)len,
-        2u);
+        5u);
+
+    if (&FW_USB_UART_HANDLE != &huart1)
+    {
+        (void)HAL_UART_Transmit(
+            &huart1,
+            (uint8_t *)bytes,
+            (uint16_t)len,
+            5u);
+    }
+    if (&FW_USB_UART_HANDLE != &huart2)
+    {
+        (void)HAL_UART_Transmit(
+            &huart2,
+            (uint8_t *)bytes,
+            (uint16_t)len,
+            5u);
+    }
 }
 
 void Board_SetPropulsionDuty(float duty_percent)
