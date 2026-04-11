@@ -20,8 +20,8 @@ The nets below come from:
 
 | Schematic Net | Hat Header Signal | Arduino Header Pin | MCU Pin (L432/G431) | Peripheral Role | Firmware Binding |
 |---|---|---|---|---|---|
-| `TX_MCU` | UART TX to bridge | `D1` | `PA9` | `USART1_TX` | `FW_USB_UART_HANDLE` |
-| `RX_MCU` | UART RX from bridge | `D0` | `PA10` | `USART1_RX` | `FW_USB_UART_HANDLE` |
+| `TX_MCU` | UART TX to bridge | `D1` | `PA9` | `USART1_TX` | `FW_USB_UART_HANDLE` (`FW_TRANSPORT_USART1_D0D1`) |
+| `RX_MCU` | UART RX from bridge | `D0` | `PA10` | `USART1_RX` | `FW_USB_UART_HANDLE` (`FW_TRANSPORT_USART1_D0D1`) |
 | `PROPULSION_MCU` | ESC PWM | `D9` | `PA8` | `TIM1_CH1` | `FW_PWM_PROP_CHANNEL` |
 | `SERVO_DIR_MCU` | Steering PWM | `D10` | `PA11` | `TIM1_CH4` | `FW_PWM_STEERING_CHANNEL` |
 | `FOURCHE` | Wheel speed input | `A0` | `PA0` | `TIM2_CH1` input capture | `FW_WHEEL_TIMER_CHANNEL` |
@@ -50,19 +50,24 @@ On `Hat_CoVASPSy_v1re2`, set:
 | SWDIO | `PA13` | ST-LINK SWD |
 | SWCLK | `PA14` | ST-LINK SWD |
 
-## USB Serial Transport
+## USB Serial Transport Profiles
 
-`usb_v1` expects a serial byte stream from the Pi. Use one of these paths:
+`usb_v1` expects a serial byte stream from the Pi and supports two UART profiles.
 
-1. Native USB CDC (preferred if your project enables USB device stack), or
-2. `USART1` through a USB-UART bridge.
+Default profile in this repository:
 
-Baseline USART pins (fallback path):
+- `FW_TRANSPORT_PROFILE = FW_TRANSPORT_STLINK_VCP`
 
-| Function | MCU Pin | Peripheral | Notes |
-|---|---|---|---|
-| USB serial TX | `PA9 (D1)` | `USART1_TX` | To USB-UART RX |
-| USB serial RX | `PA10 (D0)` | `USART1_RX` | To USB-UART TX |
+Fallback profile:
+
+- `FW_TRANSPORT_PROFILE = FW_TRANSPORT_USART1_D0D1`
+
+| Profile Macro | UART Handle | MCU Pins | Physical Path | Notes |
+|---|---|---|---|---|
+| `FW_TRANSPORT_STLINK_VCP` | `huart2` | `PA2` (TX), `PA15` (RX) | ST-LINK VCP over `ttyACM*` | Verify Nucleo solder bridges `SB2=ON`, `SB3=ON`. |
+| `FW_TRANSPORT_USART1_D0D1` | `huart1` | `PA9 (D1)`, `PA10 (D0)` | Hat `TX_MCU/RX_MCU` or USB-UART bridge | Requires Hat jumpers `J_TX=2-3`, `J_RX=2-3`. |
+
+Before bench tests, confirm transport profile and wiring match.
 
 ## PWM Outputs
 

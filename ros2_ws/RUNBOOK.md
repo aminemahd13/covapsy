@@ -34,12 +34,39 @@ Note: `sim_webots.launch.py mode:=race` auto-selects `Piste_CoVAPSy_2025a_multic
 
 ## Real-Car USB Link Checks
 
+STM32 firmware transport profiles:
+
+- default: `FW_TRANSPORT_STLINK_VCP` -> `USART2` on `PA2/PA15` (ST-LINK VCP)
+- fallback: `FW_TRANSPORT_USART1_D0D1` -> `USART1` on `PA9/PA10` (`D1/D0`)
+
+For ST-LINK VCP profile on NUCLEO-G431KB, verify solder bridges:
+
+- `SB2=ON` (`PA2` to VCP TX)
+- `SB3=ON` (`PA15` to VCP RX)
+
 Before launching real-car profiles, confirm the USB symlinks exist:
 
 ```bash
 ls -l /dev/stm32_mcu
 ls -l /dev/rplidar
 ls -l /dev/waveshare_servo
+```
+
+Always verify direct STM32 ACM traffic once before relying on symlink:
+
+```bash
+ls -l /dev/ttyACM*
+STM_TTY=/dev/ttyACM0   # adjust to detected device
+stty -F "$STM_TTY" 115200 -echo -icanon -icrnl -ixon
+timeout 2 cat "$STM_TTY"
+```
+
+Expected: recurring `TEL,...` lines.
+
+Optional one-time ROS bridge check on direct device:
+
+```bash
+ros2 run covapsy_bridge stm32_bridge_node --ros-args -p serial_device:="$STM_TTY" -p serial_baud:=115200
 ```
 
 STM32 bridge status values:

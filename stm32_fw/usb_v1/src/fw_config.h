@@ -35,13 +35,31 @@
  * Baseline STM32 peripheral bindings (NUCLEO-L432KC / NUCLEO-G431KB).
  * These symbols are expected from Cube-generated HAL files.
  *
- * Net mapping from Hat schematic:
+ * Transport profiles:
+ * - FW_TRANSPORT_STLINK_VCP: STLINK VCP UART (USART2 on PA2/PA15, SB2/SB3 ON)
+ * - FW_TRANSPORT_USART1_D0D1: Hat UART nets TX_MCU/RX_MCU via D1/D0 (USART1)
+ *
+ * Net mapping from Hat schematic (fallback profile):
  * - TX_MCU / RX_MCU -> D1 / D0 -> USART1
  * - PROPULSION_MCU -> D9 -> TIM1_CH1
  * - SERVO_DIR_MCU -> D10 -> TIM1_CH4
  * - FOURCHE -> A0 -> TIM2_CH1
  */
-#define FW_USB_UART_HANDLE huart1          /* TX_MCU / RX_MCU */
+#define FW_TRANSPORT_STLINK_VCP 1u
+#define FW_TRANSPORT_USART1_D0D1 2u
+
+#ifndef FW_TRANSPORT_PROFILE
+#define FW_TRANSPORT_PROFILE FW_TRANSPORT_STLINK_VCP
+#endif
+
+#if FW_TRANSPORT_PROFILE == FW_TRANSPORT_STLINK_VCP
+#define FW_USB_UART_HANDLE huart2          /* STLINK VCP: USART2 PA2/PA15 */
+#elif FW_TRANSPORT_PROFILE == FW_TRANSPORT_USART1_D0D1
+#define FW_USB_UART_HANDLE huart1          /* TX_MCU / RX_MCU -> D1 / D0 */
+#else
+#error "Unsupported FW_TRANSPORT_PROFILE value."
+#endif
+
 #define FW_PWM_TIMER_HANDLE htim1          /* PROPULSION_MCU / SERVO_DIR_MCU */
 #define FW_PWM_PROP_CHANNEL TIM_CHANNEL_1  /* PROPULSION_MCU */
 #define FW_PWM_STEERING_CHANNEL TIM_CHANNEL_4 /* SERVO_DIR_MCU */

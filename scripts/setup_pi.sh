@@ -52,8 +52,10 @@ echo "[5/7] Creating udev rules..."
 # Set per-device serials before running if available:
 #   export RPLIDAR_SERIAL="<udevadm serial>"
 #   export WAVESHARE_SERIAL="<udevadm serial>"
+#   export STM32_SERIAL="<udevadm serial>"
 RPLIDAR_SERIAL="${RPLIDAR_SERIAL:-}"
 WAVESHARE_SERIAL="${WAVESHARE_SERIAL:-}"
+STM32_SERIAL="${STM32_SERIAL:-}"
 WAVESHARE_VENDOR_ID="${WAVESHARE_VENDOR_ID:-1a86}"
 WAVESHARE_PRODUCT_ID="${WAVESHARE_PRODUCT_ID:-55d3}"
 WAVESHARE_MODEL="${WAVESHARE_MODEL:-USB_Single_Serial}"
@@ -68,6 +70,11 @@ if [ -n "$WAVESHARE_SERIAL" ]; then
   waveshare_serial_match=", ATTRS{serial}==\"$WAVESHARE_SERIAL\""
 fi
 
+stm32_serial_match=""
+if [ -n "$STM32_SERIAL" ]; then
+  stm32_serial_match=", ATTRS{serial}==\"$STM32_SERIAL\""
+fi
+
 # RPLidar (/dev/rplidar) - match by VID/PID (+ optional serial)
 sudo tee /etc/udev/rules.d/99-rplidar.rules > /dev/null << EOF
 SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ENV{ID_VENDOR_ID}=="10c4", ENV{ID_MODEL_ID}=="ea60"${rplidar_serial_match}, SYMLINK+="rplidar", MODE="0666"
@@ -79,9 +86,9 @@ SUBSYSTEM=="tty", KERNEL=="ttyACM*", ENV{ID_VENDOR_ID}=="${WAVESHARE_VENDOR_ID}"
 EOF
 
 # STM32 USB serial symlink (/dev/stm32_mcu)
-sudo tee /etc/udev/rules.d/99-stm32-mcu.rules << 'EOF'
-SUBSYSTEM=="tty", KERNEL=="ttyACM*", ENV{ID_VENDOR_ID}=="0483", SYMLINK+="stm32_mcu", MODE="0666"
-SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ENV{ID_VENDOR_ID}=="0483", SYMLINK+="stm32_mcu", MODE="0666"
+sudo tee /etc/udev/rules.d/99-stm32-mcu.rules > /dev/null << EOF
+SUBSYSTEM=="tty", KERNEL=="ttyACM*", ENV{ID_VENDOR_ID}=="0483"${stm32_serial_match}, SYMLINK+="stm32_mcu", MODE="0666"
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ENV{ID_VENDOR_ID}=="0483"${stm32_serial_match}, SYMLINK+="stm32_mcu", MODE="0666"
 EOF
 
 sudo udevadm control --reload-rules

@@ -12,7 +12,9 @@ This folder is the STM32-side firmware workspace for USB-connected operation wit
 
 ## Folder Layout
 
-- `cubeide_project/`: STM32CubeIDE project location (generated files live here)
+- `cubeide_project/`: STM32CubeIDE project location
+  - active build/flash target: `cubeide_project/covapsy_usb1`
+  - placeholder/non-flash project: `cubeide_project/covapsy_usb_v1`
 - `src/`: protocol and control logic source files to copy/import into CubeIDE project
 - `docs/`: implementation and bringup docs
 - `releases/`: built artifact inventory and release notes

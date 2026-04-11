@@ -1,6 +1,7 @@
 # Windows STM32CubeIDE Setup
 
-This runbook creates a project in `stm32_fw/usb_v1/cubeide_project` and imports the firmware logic from `src/`.
+This runbook uses the active project in `stm32_fw/usb_v1/cubeide_project/covapsy_usb1`.
+Do not build/flash from `covapsy_usb_v1` (placeholder only).
 
 ## 1. Install Tooling
 
@@ -12,27 +13,23 @@ Install on Windows:
 
 Verify ST-LINK connection with STM32CubeProgrammer before opening CubeIDE.
 
-## 2. Create CubeIDE Project
+## 2. Open The Active CubeIDE Project
 
 1. Open STM32CubeIDE.
-2. Open the STM32 project wizard:
-   - preferred: `File` -> `New` -> `STM32 Project`
-   - if not visible in your UI: `File` -> `New` -> `Other...` -> `Create New STM32 Project`
-3. Use the STM32/Cube wizard path (do **not** use a generic C/C++ empty Eclipse project).
-4. Select exact MCU from `docs/pinmap.md`.
-   - for `NUCLEO-G431KB`, Cube may show `STM32G431KBTx` variants (`KBT3`, `KBT6`, `...TR`); these package variants are fine for this workflow.
-5. Project location: `mycar/stm32_fw/usb_v1/cubeide_project`.
-6. Keep `Debug` and `Release` build configurations.
+2. `File` -> `Open Projects from File System...`
+3. Import:
+   - `stm32_fw/usb_v1/cubeide_project/covapsy_usb1`
+4. Confirm `Debug` and `Release` build configurations are present.
 
 ## 3. Configure Peripherals (CubeMX view)
 
 Use `docs/pinmap.md` to configure:
 
 - system clock source and frequency
-- USB serial transport path:
-  - preferred: native USB CDC device (if enabled in your project)
-  - fallback: `USART1` (`PA9/PA10`) bridged through USB-UART
-- `USART1` async parameters: `115200`, `8N1`, TX/RX enabled
+- USB serial transport path profiles:
+  - default (`FW_TRANSPORT_STLINK_VCP`): `USART2` on `PA2/PA15` via ST-LINK VCP
+  - fallback (`FW_TRANSPORT_USART1_D0D1`): `USART1` on `PA9/PA10` via Hat/USB-UART
+- both `USART1` and `USART2` async parameters: `115200`, `8N1`, TX/RX enabled
 - timer PWM channels for propulsion and steering at `50 Hz`:
   - `TIM1_CH1` on `PA8`
   - `TIM1_CH4` on `PA11`
@@ -54,6 +51,13 @@ If your timer clock is `16 MHz` (default HSI setup), use:
 - `TIM2`: `PSC=15` -> `1 MHz` tick
 
 If your timer clock differs, recompute prescaler/period accordingly.
+
+### ST-LINK VCP Hardware Sanity Check (NUCLEO-G431KB)
+
+For the default transport profile (`FW_TRANSPORT_STLINK_VCP`):
+
+- verify solder bridge `SB2=ON` (`PA2 -> ST-LINK VCP TX`)
+- verify solder bridge `SB3=ON` (`PA15 -> ST-LINK VCP RX`)
 
 ### Board Target / ADC Handle Sanity Check
 
@@ -88,6 +92,8 @@ Then wire board functions to HAL generated code.
 
 Important config alignment after copy:
 
+- default transport profile in `fw_config.h` is ST-LINK VCP (`USART2`)
+- fallback profile remains available on `USART1` (`PA9/PA10`)
 - if rear obstacle is on `PA3/ADC1_IN4`, set `FW_REAR_OBSTACLE_ADC_HANDLE` to `hadc1`
 - if your project does not configure `I2C1` + OLED, set `FW_OLED_ENABLE` to `0u`
 
