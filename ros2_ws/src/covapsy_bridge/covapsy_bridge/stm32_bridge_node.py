@@ -99,6 +99,7 @@ class STM32BridgeNode(Node):
         self.last_watchdog_brake = False
 
         self.serial_conn: Optional[object] = None
+        self.serial_rx_buffer = ''
         self.last_serial_attempt = 0.0
         self.serial_probe_index = 0
         self.active_serial_device = ''
@@ -215,6 +216,7 @@ class STM32BridgeNode(Node):
         except Exception:
             pass
         self.serial_conn = None
+        self.serial_rx_buffer = ''
         self.active_serial_device = ''
         self.active_serial_baud = 0
         self.serial_open_time = 0.0
@@ -244,6 +246,7 @@ class STM32BridgeNode(Node):
             )
             self.serial_conn.reset_input_buffer()
             self.serial_conn.reset_output_buffer()
+            self.serial_rx_buffer = ''
             self.active_serial_device = device
             self.active_serial_baud = int(baud)
             self.serial_open_time = now
@@ -273,20 +276,35 @@ class STM32BridgeNode(Node):
     def _read_telemetry(self, now: float) -> None:
         if self.serial_conn is None:
             return
-        for _ in range(20):
-            try:
-                raw = self.serial_conn.readline()
-            except SerialException:
-                self._close_serial(advance_probe=True)
+        try:
+            available = int(getattr(self.serial_conn, 'in_waiting', 0) or 0)
+            if available <= 0:
                 return
+            raw = self.serial_conn.read(available)
+        except SerialException:
+            self._close_serial(advance_probe=True)
+            return
 
-            if not raw:
-                return
+        if not raw:
+            return
 
-            line = raw.decode('ascii', errors='ignore').strip()
+        self.serial_rx_buffer += raw.decode('ascii', errors='ignore')
+        # Bound malformed/no-newline growth while keeping most recent bytes.
+        max_line_chars = 96
+        if len(self.serial_rx_buffer) > max_line_chars * 8:
+            self.serial_rx_buffer = self.serial_rx_buffer[-(max_line_chars * 4):]
+
+        parsed_lines = 0
+        while parsed_lines < 20:
+            newline_index = self.serial_rx_buffer.find('\n')
+            if newline_index < 0:
+                break
+            line = self.serial_rx_buffer[:newline_index].rstrip('\r').strip()
+            self.serial_rx_buffer = self.serial_rx_buffer[newline_index + 1 :]
             if not line:
                 continue
 
+            parsed_lines += 1
             try:
                 seq, wheel_speed, rear_obstacle, status_code = parse_telemetry_line(line)
             except Exception:

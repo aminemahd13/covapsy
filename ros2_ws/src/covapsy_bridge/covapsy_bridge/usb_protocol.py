@@ -66,7 +66,9 @@ def parse_telemetry_line(line: str) -> Tuple[int, float, bool, int]:
         raise ValueError(f'wrong prefix: {parts[0]!r}')
 
     seq = int(parts[1])
-    wheel_speed = float(parts[2])
+    # Some STM32/newlib builds can emit an empty float token when %f support is
+    # not linked; treat missing wheel speed as 0.0 so telemetry remains usable.
+    wheel_speed = 0.0 if parts[2] == '' else float(parts[2])
     rear_obstacle = parse_wire_bool(parts[3])
     status_code = int(parts[4])
 

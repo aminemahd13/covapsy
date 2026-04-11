@@ -26,6 +26,14 @@ def test_parse_telemetry_line_valid():
     assert status == 3
 
 
+def test_parse_telemetry_line_empty_speed_token_fallback():
+    seq, wheel, rear, status = parse_telemetry_line('TEL,7,,0,1')
+    assert seq == 7
+    assert wheel == 0.0
+    assert rear is False
+    assert status == 1
+
+
 def test_parse_wire_bool_accepts_text():
     assert parse_wire_bool('true') is True
     assert parse_wire_bool('False') is False
