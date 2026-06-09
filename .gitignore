@@ -1,0 +1,7 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# STM32 build artifacts
+stm32/build/

@@ -1,0 +1,14 @@
+pyserial==3.5
+# LiDAR (RPLIDAR A2M12 over the Slamtec USB adapter). The 'roboticia' fork
+# handles the A2 express scan mode well; it still imports as `rplidar`.
+# Install on the Pi with:  python3 -m pip install --break-system-packages rplidar-roboticia
+rplidar-roboticia
+# numpy: only used by the optional camera module (camera.py). On the Pi prefer
+# the apt package python3-numpy. The pure-Python parts (gap_follower, lidar,
+# drive) need nothing beyond pyserial.
+numpy
+# Camera (camera.py): the RealSense D435i RGB is read as a plain UVC node via
+# OpenCV -- NO pyrealsense2 / librealsense build needed. Install on the Pi with:
+#   sudo apt install -y python3-opencv v4l-utils
+# (apt build, not pip). camera.py degrades gracefully if cv2 is absent.
+

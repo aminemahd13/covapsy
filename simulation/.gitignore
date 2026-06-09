@@ -1,0 +1,9 @@
+# Webots + Python sim junk
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+# Webots per-user view state + editor lock files
+*.wbproj
+.*.wbproj
+.~lock.*#
